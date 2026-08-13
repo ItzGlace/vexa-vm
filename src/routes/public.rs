@@ -616,6 +616,7 @@ pub async fn public_reinstall(
         image_id,
         true,
         false,
+        vm.disk_gib,
         input.password.as_deref().is_some_and(|value| !value.trim().is_empty()),
     )?;
     if let Some(existing) = idempotency_key

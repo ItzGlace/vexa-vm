@@ -241,8 +241,9 @@ non-error VM rows are counted against the administrator's `general.cpu_overcommi
 and `general.memory_overcommit_ratio`. The host response adds `capacity_policy`,
 `schedulable_vcpus`, `available_vcpus`, `schedulable_memory_bytes`, and
 `available_memory_bytes`; existing fields, routes, and create payloads are unchanged.
-Memory admission uses the configured maximum entitlement while libvirt starts a guest at a bounded
-VirtIO balloon floor. A `creating` row also reserves its requested
+Memory overcommit changes admission accounting only. Libvirt starts every guest at its complete
+configured entitlement and Vexa never automatically lowers the guest-visible balloon target. A
+`creating` row also reserves its requested
 disk capacity until provisioning materializes the disk, preventing concurrent
 requests from both consuming the same reported filesystem headroom. The
 reservation lock is not held while the job performs hypervisor work.
@@ -617,7 +618,7 @@ storage roots, and secure-cookie flag. Those values cannot be changed through
 this endpoint. Administrator credentials use the dedicated credentials
 endpoint, not an `account` settings section.
 
-Sampling/retention, CPU and balloon-backed memory overcommit, new-VM network defaults, VNC enablement,
+Sampling/retention, CPU and admission-accounted memory overcommit, new-VM network defaults, VNC enablement,
 session lifetime, and rate limits are read dynamically by the service. `node_name`, `locale`,
 `timezone`, and `ntp_servers` are stored control-plane preferences in this
 release; changing them does not rename the Linux host or reconfigure its locale,

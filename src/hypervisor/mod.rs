@@ -232,8 +232,8 @@ pub enum Firmware {
 pub struct CreateVmRequest {
     pub name: String,
     pub vcpus: u32,
-    /// Maximum guest-visible memory entitlement. `initial_memory_mib` is the
-    /// boot-time balloon target when memory overcommit is enabled.
+    /// Maximum guest-visible memory entitlement. `initial_memory_mib` is kept
+    /// for backend compatibility and must equal the entitlement in Vexa.
     pub memory_mib: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_memory_mib: Option<u64>,
@@ -331,9 +331,9 @@ pub trait Hypervisor: Send + Sync {
         Ok(())
     }
     async fn resize(&self, name: &str, request: ResizeVmRequest) -> HypervisorResult<VmInfo>;
-    /// Change only the running guest's VirtIO balloon target. The persistent
-    /// maximum entitlement remains unchanged and is still reported by VM
-    /// inventory and API resource fields.
+    /// Reconcile the running and persistent VirtIO balloon target. The maximum
+    /// entitlement remains unchanged and is still reported by VM inventory
+    /// and API resource fields.
     async fn set_memory_balloon(&self, name: &str, target_mib: u64) -> HypervisorResult<()> {
         let _ = (name, target_mib);
         Err(HypervisorError::BackendUnavailable(

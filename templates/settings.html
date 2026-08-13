@@ -56,9 +56,9 @@
         </div>
         <div class="mt-6 grid gap-5 sm:grid-cols-2">
           <label><span class="label">CPU overcommit ratio</span><input name="cpu_overcommit_ratio" type="number" min="1" max="16" step="0.25" class="field" required><span class="mt-1.5 block text-xs leading-5 text-slate-600">Virtual CPUs are time-sliced by KVM. 4× is a balanced default for mixed workloads.</span></label>
-          <label><span class="label">Memory overcommit ratio</span><input name="memory_overcommit_ratio" type="number" min="1" max="4" step="0.1" class="field" required><span class="mt-1.5 block text-xs leading-5 text-slate-600">The VM retains its configured maximum while VirtIO ballooning sets a safe boot-time floor.</span></label>
+          <label><span class="label">Memory overcommit ratio</span><input name="memory_overcommit_ratio" type="number" min="1" max="4" step="0.1" class="field" required><span class="mt-1.5 block text-xs leading-5 text-slate-600">Expands admission capacity only. Every guest boots with and retains its full configured memory.</span></label>
         </div>
-        <p class="mt-5 text-sm leading-6 text-amber-100/80">Memory overcommit requires a working VirtIO balloon driver in each guest. Disk capacity is never oversold, and Vexa keeps 256 MiB of host memory outside the guest pool.</p>
+        <p class="mt-5 text-sm leading-6 text-amber-100/80">VirtIO balloon support remains attached for metrics and entitlement repair, but Vexa never lowers guest-visible RAM automatically. Disk capacity is never oversold, and 256 MiB remains reserved for the host.</p>
         <div class="mt-6 flex justify-end"><button class="btn-primary" type="submit">Save capacity policy</button></div>
       </form>
 

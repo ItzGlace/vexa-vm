@@ -2477,7 +2477,8 @@
           "iso_id": { "type": "string", "deprecated": true, "description": "Compatibility alias for image_id." },
           "password": { "type": ["string", "null"], "minLength": 8, "writeOnly": true, "description": "Replacement provisioning password for cloud-init or automatic images. It may be omitted only when the VM already has an encrypted credential. A non-null value is rejected for a manual installer; after that manual reinstall succeeds, any prior stored password is cleared." },
           "start": { "type": "boolean", "default": true },
-          "install_guest_tools": { "type": "boolean", "default": false, "description": "Install Guest Tools, or preserve it when already installed. Only compatible automated images are accepted." }
+          "install_guest_tools": { "type": "boolean", "default": false, "description": "Install Guest Tools, or preserve it when already installed. Only compatible automated images are accepted." },
+          "disk_gib": { "type": ["integer", "null"], "minimum": 1, "description": "Optional replacement disk size for a destructive plan downgrade. It may shrink only as part of reinstall and cannot exceed the current disk; use VM resize for growth." }
         },
         "additionalProperties": false
       },
@@ -3151,7 +3152,7 @@
           "sample_interval_seconds": { "type": "integer", "minimum": 5, "maximum": 3600 },
           "metrics_retention_days": { "type": "integer", "minimum": 1, "maximum": 3650 },
           "cpu_overcommit_ratio": { "type": "number", "minimum": 1, "maximum": 16, "default": 4 },
-          "memory_overcommit_ratio": { "type": "number", "minimum": 1, "maximum": 4, "default": 1.5, "description": "Backed by a bounded live VirtIO balloon target; each VM retains its maximum memory entitlement." }
+          "memory_overcommit_ratio": { "type": "number", "minimum": 1, "maximum": 4, "default": 1.5, "description": "Admission-accounting ratio only. Every VM boots with and retains its full configured memory entitlement; VirtIO balloon support is retained for metrics and entitlement repair." }
         },
         "additionalProperties": false
       },

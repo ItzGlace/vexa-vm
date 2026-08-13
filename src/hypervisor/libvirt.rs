@@ -1164,6 +1164,11 @@ impl Hypervisor for LibvirtHypervisor {
             )));
         }
         let value = format!("{target_mib}MiB");
+        self.virsh(
+            "set-persistent-memory-balloon",
+            &["setmem", name, &value, "--config"],
+        )
+        .await?;
         self.virsh("set-live-memory-balloon", &["setmem", name, &value, "--live"])
             .await?;
         Ok(())

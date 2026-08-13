@@ -3,6 +3,25 @@
 All notable changes to Vexa-VM are documented here. The project follows Semantic Versioning after
 the first stable release.
 
+## 0.1.5 - 2026-08-13
+
+### Added
+
+- Backward-compatible optional `disk_gib` support on administrator reinstall requests. This permits
+  a smaller replacement system disk only as part of an explicitly destructive reinstall, while the
+  normal VM resize endpoint remains grow-only.
+- Host capability flags for safe orchestration of reinstall-time disk replacement and full-memory
+  entitlement behavior.
+
+### Fixed
+
+- Memory overcommit now affects admission accounting only: every guest starts with its complete
+  configured RAM entitlement instead of a ratio-reduced balloon target.
+- Existing running guests whose balloon target was reduced by 0.1.4 are automatically restored to
+  their full configured memory, both live and persistently across reboots.
+- Removed automatic host-pressure balloon reclamation so a 4 GiB VM remains a 4 GiB VM inside the
+  guest while still retaining the VirtIO balloon device for telemetry and explicit repair.
+
 ## 0.1.4 - 2026-08-13
 
 ### Added

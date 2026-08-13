@@ -31,14 +31,6 @@ use crate::{
 const GIB: u64 = 1024 * 1024 * 1024;
 const MIB: u64 = 1024 * 1024;
 
-#[derive(Clone, Debug)]
-struct BalloonCandidate {
-    name: String,
-    maximum_mib: u64,
-    current_mib: u64,
-    used_mib: u64,
-}
-
 #[derive(Clone, Default)]
 struct PreviousVmSample {
     sampled_at: i64,
@@ -50,7 +42,7 @@ pub fn spawn(state: Arc<AppState>) {
     tokio::spawn(routed_network_loop(state.clone()));
     tokio::spawn(inventory_loop(state.clone()));
     tokio::spawn(metrics_loop(state.clone()));
-    tokio::spawn(memory_balloon_loop(state.clone()));
+    tokio::spawn(memory_entitlement_loop(state.clone()));
     tokio::spawn(traffic_quota_loop(state.clone()));
     tokio::spawn(network_security_loop(state.clone()));
     tokio::spawn(guest_tools_health_loop(state.clone()));
@@ -59,29 +51,21 @@ pub fn spawn(state: Arc<AppState>) {
     tokio::spawn(maintenance_loop(state));
 }
 
-async fn memory_balloon_loop(state: Arc<AppState>) {
-    tokio::time::sleep(Duration::from_secs(30)).await;
+async fn memory_entitlement_loop(state: Arc<AppState>) {
+    // Repair domains created by older releases quickly. Those releases used
+    // the overcommit ratio as a guest-visible boot target, so a 4 GiB VM at
+    // 1.5x could incorrectly boot with only about 2.7 GiB. Overcommit is now
+    // admission accounting only; every running guest keeps its entitlement.
+    tokio::time::sleep(Duration::from_secs(5)).await;
     loop {
-        if let Err(error) = reconcile_memory_balloon(&state).await {
-            warn!(error = %error, "memory balloon reconciliation failed");
+        if let Err(error) = restore_memory_entitlements(&state).await {
+            warn!(error = %error, "memory entitlement reconciliation failed");
         }
         tokio::time::sleep(Duration::from_secs(15)).await;
     }
 }
 
-async fn reconcile_memory_balloon(state: &AppState) -> AppResult<()> {
-    let ratio = state
-        .setting_f64("general", "memory_overcommit_ratio")?
-        .filter(|ratio| (1.0..=4.0).contains(ratio))
-        .unwrap_or(1.5);
-    let host = state.host_info.read().await.clone();
-    let budget_mib = host
-        .memory
-        .total_bytes
-        .saturating_sub(256 * MIB)
-        .checked_div(MIB)
-        .unwrap_or_default();
-    let mut candidates = Vec::new();
+async fn restore_memory_entitlements(state: &AppState) -> AppResult<()> {
     for vm in state
         .db
         .list_vms()?
@@ -101,95 +85,23 @@ async fn reconcile_memory_balloon(state: &AppState) -> AppResult<()> {
             .checked_div(MIB)
             .unwrap_or(vm.memory_mib)
             .clamp(256, vm.memory_mib);
-        let used_mib = stats
-            .memory_current_bytes
-            .unwrap_or(current_mib.saturating_mul(MIB))
-            .checked_div(MIB)
-            .unwrap_or(current_mib)
-            .min(current_mib);
-        candidates.push(BalloonCandidate {
-            name: vm.name,
-            maximum_mib: vm.memory_mib,
-            current_mib,
-            used_mib,
-        });
-    }
-    let plan = plan_balloon_targets(&candidates, budget_mib, ratio);
-    for (candidate, target_mib) in candidates.iter().zip(plan) {
-        // A deadband avoids needless libvirt traffic and balloon oscillation
-        // around small guest-statistics changes.
-        if candidate.current_mib.abs_diff(target_mib) < 64 {
+        if !memory_entitlement_needs_restore(current_mib, vm.memory_mib) {
             continue;
         }
-        match state
-            .hypervisor
-            .set_memory_balloon(&candidate.name, target_mib)
-            .await
-        {
+        match state.hypervisor.set_memory_balloon(&vm.name, vm.memory_mib).await {
             Ok(()) => {
-                debug!(vm = %candidate.name, current_mib = candidate.current_mib, target_mib, "adjusted VM memory balloon")
+                info!(vm = %vm.name, current_mib, entitlement_mib = vm.memory_mib, "restored full VM memory entitlement")
             }
             Err(error) => {
-                warn!(vm = %candidate.name, target_mib, error = %error, "could not adjust VM memory balloon")
+                warn!(vm = %vm.name, entitlement_mib = vm.memory_mib, error = %error, "could not restore VM memory entitlement")
             }
         }
     }
     Ok(())
 }
 
-fn plan_balloon_targets(candidates: &[BalloonCandidate], budget_mib: u64, ratio: f64) -> Vec<u64> {
-    let floors = candidates
-        .iter()
-        .map(|candidate| {
-            (((candidate.maximum_mib as f64) / ratio).ceil() as u64)
-                .max(256)
-                .min(candidate.maximum_mib)
-        })
-        .collect::<Vec<_>>();
-    let floor_total = floors.iter().copied().fold(0u64, u64::saturating_add);
-    if floor_total >= budget_mib {
-        return floors;
-    }
-
-    let desired = candidates
-        .iter()
-        .zip(&floors)
-        .map(|(candidate, floor)| {
-            let headroom = (candidate.maximum_mib / 4).clamp(256, 2048);
-            candidate
-                .used_mib
-                .saturating_add(headroom)
-                .max(*floor)
-                .min(candidate.maximum_mib)
-        })
-        .collect::<Vec<_>>();
-    let wanted = desired
-        .iter()
-        .zip(&floors)
-        .map(|(desired, floor)| desired.saturating_sub(*floor))
-        .collect::<Vec<_>>();
-    let wanted_total = wanted.iter().copied().fold(0u64, u64::saturating_add);
-    if wanted_total == 0 {
-        return floors;
-    }
-    let remaining = budget_mib.saturating_sub(floor_total).min(wanted_total);
-    let mut targets = floors.clone();
-    let mut assigned = 0u64;
-    for (target, wanted) in targets.iter_mut().zip(&wanted) {
-        let share = remaining.saturating_mul(*wanted) / wanted_total;
-        *target = target.saturating_add(share);
-        assigned = assigned.saturating_add(share);
-    }
-    let mut remainder = remaining.saturating_sub(assigned);
-    for ((target, desired), wanted) in targets.iter_mut().zip(&desired).zip(&wanted) {
-        if remainder == 0 {
-            break;
-        }
-        let room = desired.saturating_sub(*target).min(remainder).min(*wanted);
-        *target = target.saturating_add(room);
-        remainder = remainder.saturating_sub(room);
-    }
-    targets
+fn memory_entitlement_needs_restore(current_mib: u64, entitlement_mib: u64) -> bool {
+    current_mib.saturating_add(64) < entitlement_mib
 }
 
 async fn routed_network_loop(state: Arc<AppState>) {
@@ -1083,6 +995,10 @@ async fn execute_job(state: &AppState, job: &Job) -> AppResult<Value> {
                 .get("replacement_root_username")
                 .and_then(Value::as_str)
                 .map(str::to_owned);
+            let replacement_disk_gib = job
+                .payload
+                .get("replacement_disk_gib")
+                .and_then(Value::as_u64);
             let mut provisioning_vm = vm.clone();
             if let Some(value) = replacement_iso_id.as_ref() {
                 provisioning_vm.iso_id = Some(value.clone());
@@ -1207,6 +1123,7 @@ async fn execute_job(state: &AppState, job: &Job) -> AppResult<Value> {
             if replacement_iso_id.is_some()
                 || replacement_os_family.is_some()
                 || replacement_root_username.is_some()
+                || replacement_disk_gib.is_some()
             {
                 state.db.patch_vm(
                     &vm.id,
@@ -1214,6 +1131,7 @@ async fn execute_job(state: &AppState, job: &Job) -> AppResult<Value> {
                         iso_id: replacement_iso_id.map(Some),
                         os_family: replacement_os_family,
                         root_username: replacement_root_username,
+                        disk_gib: replacement_disk_gib,
                         ..VmPatch::default()
                     },
                 )?;
@@ -2714,34 +2632,19 @@ async fn maintenance_loop(state: Arc<AppState>) {
 #[cfg(test)]
 mod cloudbase_network_tests {
     use super::{
-        accounted_traffic_delta, cloudbase_static_subnet, is_windows_os_family, plan_balloon_targets,
+        accounted_traffic_delta, cloudbase_static_subnet, is_windows_os_family,
+        memory_entitlement_needs_restore,
         remove_vm_provisioning_seed, windows_computer_name, windows_disk_layout, windows_first_logon_command,
-        BalloonCandidate, PreviousVmSample,
+        PreviousVmSample,
     };
     use crate::hypervisor::VmStats;
     use crate::models::AddressFamily;
 
     #[test]
-    fn balloon_plan_preserves_floors_and_shares_pressure_headroom() {
-        let candidates = vec![
-            BalloonCandidate {
-                name: "vm-a".into(),
-                maximum_mib: 4096,
-                current_mib: 2048,
-                used_mib: 1800,
-            },
-            BalloonCandidate {
-                name: "vm-b".into(),
-                maximum_mib: 4096,
-                current_mib: 2048,
-                used_mib: 900,
-            },
-        ];
-        let targets = plan_balloon_targets(&candidates, 4600, 2.0);
-        assert_eq!(targets.iter().sum::<u64>(), 4600);
-        assert!(targets[0] > targets[1], "the busier guest receives more headroom");
-        assert!(targets.iter().all(|target| (2048..=4096).contains(target)));
-        assert_eq!(plan_balloon_targets(&candidates, 4096, 2.0), vec![2048, 2048]);
+    fn memory_entitlement_repair_only_expands_reduced_guests() {
+        assert!(memory_entitlement_needs_restore(2731, 4096));
+        assert!(!memory_entitlement_needs_restore(4032, 4096));
+        assert!(!memory_entitlement_needs_restore(4096, 4096));
     }
 
     #[test]

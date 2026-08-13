@@ -335,6 +335,9 @@ pub struct ReinstallBody {
     pub start: bool,
     #[serde(default)]
     pub install_guest_tools: bool,
+    /// Optional replacement disk size for destructive plan downgrades. Disk
+    /// growth remains the resize endpoint's responsibility.
+    pub disk_gib: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -477,7 +480,14 @@ pub async fn host(
         json!({
             "cpu_overcommit_ratio": capacity_policy.cpu_overcommit_ratio,
             "memory_overcommit_ratio": capacity_policy.memory_overcommit_ratio,
-            "memory_backing": "virtio-balloon",
+            "memory_backing": "virtio-balloon-full-entitlement",
+        }),
+    );
+    object.insert(
+        "capabilities".into(),
+        json!({
+            "reinstall_disk_resize": true,
+            "full_memory_entitlement": true,
         }),
     );
     object.insert(
@@ -1209,11 +1219,19 @@ pub async fn reinstall_vm(
     auth.require("vms:reinstall")?;
     let vm = required_vm(&state, &id)?;
     let idempotency_key = idempotency_key(&headers)?;
+    let replacement_disk_gib = input.disk_gib.unwrap_or(vm.disk_gib);
+    if !(1..=vm.disk_gib).contains(&replacement_disk_gib) {
+        return Err(AppError::Validation(format!(
+            "reinstall disk size must be between 1 GiB and the current {} GiB; use VM resize for disk growth",
+            vm.disk_gib
+        )));
+    }
     let request_fingerprint = reinstall_request_fingerprint(
         &vm.id,
         &input.image_id,
         input.start,
         input.install_guest_tools,
+        replacement_disk_gib,
         input
             .password
             .as_deref()
@@ -1286,7 +1304,7 @@ pub async fn reinstall_vm(
     let payload = json!({
         "request": ReinstallVmRequest {
             image,
-            disk_gib: vm.disk_gib,
+            disk_gib: replacement_disk_gib,
             cloud_init_iso: None,
             guest_tools_socket,
             start: input.start,
@@ -1299,6 +1317,7 @@ pub async fn reinstall_vm(
         "replacement_iso_id": image_record.id.clone(),
         "replacement_os_family": image_record.os_family.clone(),
         "replacement_root_username": guest_administrator_default(&image_record.os_family),
+        "replacement_disk_gib": replacement_disk_gib,
     });
     let job = match state.db.enqueue_reinstall_job(
         &NewJob {
@@ -4307,7 +4326,7 @@ async fn validate_create_capacity(state: &AppState, spec: &NewVm, start: bool) -
     let requested_memory = spec.memory_mib.saturating_mul(MIB_BYTES);
     if requested_memory > capacity.available_memory_bytes {
         return Err(AppError::Validation(format!(
-            "requested {} MiB memory exceeds this node's balloon-backed overcommit capacity of {} MiB (memory ratio {:.2}x; 256 MiB remains reserved for the host)",
+            "requested {} MiB memory exceeds this node's configured overcommit capacity of {} MiB (memory ratio {:.2}x; 256 MiB remains reserved for the host)",
             spec.memory_mib,
             capacity.available_memory_bytes / MIB_BYTES,
             policy.memory_overcommit_ratio,
@@ -4315,18 +4334,11 @@ async fn validate_create_capacity(state: &AppState, spec: &NewVm, start: bool) -
     }
 
     let metrics = state.host_detector.sample().await?;
-    let initial_memory_mib = balloon_floor_mib(spec.memory_mib, policy.memory_overcommit_ratio);
     if start {
-        let live_memory = metrics
-            .memory
-            .available_bytes
-            .saturating_sub(HOST_MEMORY_RESERVE_BYTES);
-        let initial_memory = initial_memory_mib.saturating_mul(MIB_BYTES);
-        if initial_memory > live_memory {
+        if metrics.memory.available_bytes <= HOST_MEMORY_RESERVE_BYTES {
             return Err(AppError::Validation(format!(
-                "the VM needs a {} MiB balloon floor but only {} MiB is currently available for a new running VM",
-                initial_memory_mib,
-                live_memory / MIB_BYTES
+                "the host memory reserve is exhausted; at least {} MiB must remain available before another VM can start",
+                HOST_MEMORY_RESERVE_BYTES / MIB_BYTES
             )));
         }
     }
@@ -4360,7 +4372,10 @@ async fn validate_create_capacity(state: &AppState, spec: &NewVm, start: bool) -
             available_disk / GIB_BYTES
         )));
     }
-    Ok(initial_memory_mib)
+    // The ratio expands admission capacity; it must never reduce what the
+    // guest sees. VirtIO balloon support remains attached for statistics and
+    // entitlement recovery, but its boot target equals the full allocation.
+    Ok(spec.memory_mib)
 }
 
 fn capacity_policy(state: &AppState) -> AppResult<CapacityPolicy> {
@@ -4398,14 +4413,6 @@ fn compute_capacity(
 
 fn scaled_capacity(physical: u64, ratio: f64) -> u64 {
     ((physical as f64) * ratio).floor().min(u64::MAX as f64) as u64
-}
-
-fn balloon_floor_mib(entitlement_mib: u64, memory_overcommit_ratio: f64) -> u64 {
-    (((entitlement_mib as f64) / memory_overcommit_ratio)
-        .ceil()
-        .min(u64::MAX as f64) as u64)
-        .max(256)
-        .min(entitlement_mib)
 }
 
 fn pending_create_disk_reservations(vms: &[Vm]) -> u64 {
@@ -4524,6 +4531,7 @@ pub(super) fn reinstall_request_fingerprint(
     image_id: &str,
     start: bool,
     install_guest_tools: bool,
+    disk_gib: u64,
     password_supplied: bool,
 ) -> AppResult<String> {
     let encoded = serde_json::to_vec(&json!({
@@ -4531,6 +4539,7 @@ pub(super) fn reinstall_request_fingerprint(
         "image_id": image_id,
         "start": start,
         "install_guest_tools": install_guest_tools,
+        "disk_gib": disk_gib,
         "password_supplied": password_supplied,
     }))
     .map_err(|error| AppError::Internal(format!("could not fingerprint VM reinstall request: {error}")))?;
@@ -5520,7 +5529,7 @@ mod image_catalog_tests {
     }
 
     #[test]
-    fn overcommit_capacity_and_balloon_floor_are_bounded() {
+    fn overcommit_capacity_is_bounded_without_reducing_guest_entitlements() {
         let policy = CapacityPolicy {
             cpu_overcommit_ratio: 4.0,
             memory_overcommit_ratio: 2.0,
@@ -5536,9 +5545,6 @@ mod image_catalog_tests {
         assert_eq!(capacity.available_vcpus, 12);
         assert_eq!(capacity.schedulable_memory_bytes, 64 * GIB_BYTES);
         assert_eq!(capacity.available_memory_bytes, 24 * GIB_BYTES);
-        assert_eq!(balloon_floor_mib(4096, 2.0), 2048);
-        assert_eq!(balloon_floor_mib(512, 4.0), 256);
-        assert_eq!(balloon_floor_mib(4096, 1.0), 4096);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
