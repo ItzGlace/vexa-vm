@@ -251,16 +251,29 @@ pub fn new_secret() -> String {
 pub async fn apply_network_inventory(state: &AppState, vm: &Vm) -> AppResult<GuestApplyResult> {
     let records = state.db.vm_ip_addresses(&vm.id)?;
     let dns = state.db.dns_servers(None, Some(&vm.id))?;
-    let routed = crate::services::routed_network::plan(vm)?;
+    let routed = crate::services::routed_network::effective_plan(state, vm).await?;
+    let linux_guest = state
+        .db
+        .vm_guest_tools(&vm.id)?
+        .map(|tools| tools.platform == GuestToolsPlatform::Linux)
+        .unwrap_or_else(|| {
+            !is_routeros_vm(vm) && !vm.os_family.to_ascii_lowercase().contains("windows")
+        });
     let mut addresses = Vec::with_capacity(records.len() + usize::from(routed.is_some()));
     let mut ipv4_gateway = None;
     let mut ipv6_gateway = None;
 
     if let Some(plan) = routed.as_ref() {
-        addresses.push(NetworkAddress {
-            address: IpAddr::V4(plan.guest_address),
-            prefix_length: plan.prefix_length,
-        });
+        // Linux selects the first address as the source of the default route.
+        // A link-local transit address therefore caused provider egress drops.
+        // The gateway remains reachable through the on-link route and the
+        // primary provider /32 becomes the source address automatically.
+        if !linux_guest {
+            addresses.push(NetworkAddress {
+                address: IpAddr::V4(plan.guest_address),
+                prefix_length: plan.prefix_length,
+            });
+        }
         ipv4_gateway = Some(IpAddr::V4(plan.gateway));
     }
     for record in records {

@@ -1533,13 +1533,10 @@ async fn build_cloud_init_seed(
     let ipv6 = addresses
         .iter()
         .any(|address| address.family == crate::models::AddressFamily::V6);
-    let mut configured_addresses = addresses
+    let configured_addresses = addresses
         .iter()
         .map(|address| format!("{}/{}", address.address, address.prefix_length))
         .collect::<Vec<_>>();
-    if let Some(routed) = routed.as_ref() {
-        configured_addresses.push(format!("{}/{}", routed.guest_address, routed.prefix_length));
-    }
     let routes = if let Some(routed) = routed.as_ref() {
         std::collections::BTreeSet::from([routed.gateway.to_string()])
     } else {
@@ -1570,7 +1567,7 @@ async fn build_cloud_init_seed(
         network.push_str("    routes:\n");
         for gateway in routes {
             network.push_str(&format!(
-                "      - to: default\n        via: {}\n",
+                "      - to: default\n        via: {}\n        on-link: true\n",
                 quoted(&gateway)?
             ));
         }
@@ -2072,10 +2069,9 @@ fn append_cloud_init_base64_file(user_data: &mut String, path: &str, permissions
 
 /// Build a NetworkManager keyfile fallback for routed guests.
 ///
-/// The link-local transit address owns the default route while one or more
-/// provider addresses remain `/32`s on the same interface. NetworkManager's
-/// numbered `addressN` syntax supports that topology without a shell script or
-/// distribution-specific network configuration path.
+/// Provider addresses remain `/32`s while the link-local gateway is declared
+/// as an explicit on-link route. Keeping the transit address off the guest
+/// makes the primary provider address the deterministic outbound source.
 fn networkmanager_routed_keyfile(
     vm: &crate::models::Vm,
     routed: &crate::services::routed_network::RoutedIpv4,
@@ -2091,17 +2087,19 @@ fn networkmanager_routed_keyfile(
             "routed VM MAC address contains an invalid character".into(),
         ));
     }
-    let mut profile = format!(
-        "[connection]\nid=vexa-routed\ntype=ethernet\ninterface-name=eth0\nautoconnect=true\nautoconnect-priority=100\n\n[ethernet]\nmac-address={mac}\n\n[ipv4]\nmethod=manual\naddress1={}/{},{}\n",
-        routed.guest_address,
-        routed.prefix_length,
-        routed.gateway,
-    );
-    let mut index = 2_u32;
-    for address in addresses
+    let ipv4_addresses = addresses
         .iter()
         .filter(|address| address.family == crate::models::AddressFamily::V4)
-    {
+        .collect::<Vec<_>>();
+    let primary = ipv4_addresses.first().ok_or_else(|| {
+        AppError::Configuration("routed VM has no assigned public IPv4 address".into())
+    })?;
+    let mut profile = format!(
+        "[connection]\nid=vexa-routed\ntype=ethernet\ninterface-name=eth0\nautoconnect=true\nautoconnect-priority=100\n\n[ethernet]\nmac-address={mac}\n\n[ipv4]\nmethod=manual\naddress1={}/{}\nroute1=0.0.0.0/0,{},0\nroute1_options=onlink=true\n",
+        primary.address, primary.prefix_length, routed.gateway,
+    );
+    let mut index = 2_u32;
+    for address in ipv4_addresses.into_iter().skip(1) {
         profile.push_str(&format!(
             "address{index}={}/{}\n",
             address.address, address.prefix_length

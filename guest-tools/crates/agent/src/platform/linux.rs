@@ -16,6 +16,10 @@ use crate::config::Policy;
 const MANAGED_BEGIN: &str = "# BEGIN VEXA GUEST TOOLS";
 const MANAGED_END: &str = "# END VEXA GUEST TOOLS";
 const MAX_AUTHORIZED_KEYS_BYTES: u64 = 1024 * 1024;
+const MAX_CLOUD_INIT_NETWORK_BYTES: u64 = 1024 * 1024;
+const CLOUD_INIT_NETPLAN: &str = "/etc/netplan/50-cloud-init.yaml";
+const CLOUD_INIT_NETPLAN_BACKUP: &str = "/etc/netplan/50-cloud-init.yaml.vexa-disabled";
+const CLOUD_INIT_NETWORK_DISABLE: &str = "/etc/cloud/cloud.cfg.d/99-vexa-disable-network-config.cfg";
 // Linux values from <fcntl.h>. This module is compiled only for Linux.
 const O_NONBLOCK: i32 = 0o4000;
 const O_DIRECTORY: i32 = 0o200000;
@@ -116,12 +120,17 @@ impl NativePlatform {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => return Err(error).context("failed to read managed netplan configuration"),
         };
+        let cloud_init = disable_generated_cloud_init_network(&interface)?;
         let configuration = render_netplan(&interface, addresses, gateways, dns_servers);
-        atomic_write_root_owned(path, configuration.as_bytes())?;
+        if let Err(error) = atomic_write_root_owned(path, configuration.as_bytes()) {
+            restore_generated_cloud_init_network(cloud_init.as_ref());
+            return Err(error).context("failed to write managed netplan configuration");
+        }
         if let Err(error) =
             run_command("netplan", &["generate"], None).and_then(|_| run_command("netplan", &["apply"], None))
         {
             restore_managed_netplan(path, previous.as_deref());
+            restore_generated_cloud_init_network(cloud_init.as_ref());
             let _ = run_command("netplan", &["generate"], None);
             let _ = run_command("netplan", &["apply"], None);
             return Err(error).context(
@@ -239,11 +248,109 @@ fn validate_linux_interface(interface: &str) -> Result<()> {
 }
 
 fn default_route_interface() -> Option<String> {
-    let routes = fs::read_to_string("/proc/net/route").ok()?;
-    routes.lines().skip(1).find_map(|line| {
+    let routes = fs::read_to_string("/proc/net/route").unwrap_or_default();
+    let interfaces = fs::read_dir("/sys/class/net")
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect::<Vec<_>>();
+    select_network_interface(&routes, &interfaces)
+}
+
+fn select_network_interface(routes: &str, interfaces: &[String]) -> Option<String> {
+    if let Some(interface) = routes.lines().skip(1).find_map(|line| {
         let fields = line.split_whitespace().collect::<Vec<_>>();
         (fields.len() >= 4 && fields[1] == "00000000").then(|| fields[0].to_owned())
-    })
+    }) {
+        return Some(interface);
+    }
+    let mut candidates = interfaces
+        .iter()
+        .filter(|interface| interface.as_str() != "lo")
+        .filter(|interface| validate_linux_interface(interface).is_ok());
+    let interface = candidates.next()?.clone();
+    candidates.next().is_none().then_some(interface)
+}
+
+#[derive(Debug)]
+struct CloudInitNetworkBackup {
+    original: Vec<u8>,
+    disable_previous: Option<Vec<u8>>,
+}
+
+fn disable_generated_cloud_init_network(interface: &str) -> Result<Option<CloudInitNetworkBackup>> {
+    let path = Path::new(CLOUD_INIT_NETPLAN);
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("failed to inspect cloud-init netplan configuration"),
+    };
+    if !metadata.file_type().is_file() || metadata.len() > MAX_CLOUD_INIT_NETWORK_BYTES {
+        bail!("cloud-init netplan configuration is not a safe regular file");
+    }
+    use std::os::unix::fs::MetadataExt;
+    if metadata.uid() != 0 {
+        bail!("cloud-init netplan configuration is not owned by root");
+    }
+    let original = fs::read(path).context("failed to read cloud-init netplan configuration")?;
+    let rendered = std::str::from_utf8(&original)
+        .context("cloud-init netplan configuration is not valid UTF-8")?;
+    if !is_generated_cloud_init_network(rendered, interface) {
+        return Ok(None);
+    }
+    let backup = Path::new(CLOUD_INIT_NETPLAN_BACKUP);
+    if backup.exists() {
+        bail!("a prior cloud-init netplan backup already exists");
+    }
+    let disable_path = Path::new(CLOUD_INIT_NETWORK_DISABLE);
+    let disable_previous = match fs::read(disable_path) {
+        Ok(contents) => Some(contents),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error).context("failed to read cloud-init network policy"),
+    };
+    fs::rename(path, backup).context("failed to preserve cloud-init netplan configuration")?;
+    if let Some(parent) = disable_path.parent() {
+        fs::create_dir_all(parent).context("failed to create cloud-init policy directory")?;
+    }
+    if let Err(error) = atomic_write_root_owned(disable_path, b"network: {config: disabled}\n") {
+        let _ = fs::rename(backup, path);
+        return Err(error).context("failed to disable cloud-init network rewrites");
+    }
+    Ok(Some(CloudInitNetworkBackup {
+        original,
+        disable_previous,
+    }))
+}
+
+fn restore_generated_cloud_init_network(backup: Option<&CloudInitNetworkBackup>) {
+    let Some(backup_state) = backup else {
+        return;
+    };
+    let path = Path::new(CLOUD_INIT_NETPLAN);
+    let preserved = Path::new(CLOUD_INIT_NETPLAN_BACKUP);
+    if fs::rename(preserved, path).is_err() {
+        let _ = atomic_write_root_owned(path, &backup_state.original);
+    }
+    let disable_path = Path::new(CLOUD_INIT_NETWORK_DISABLE);
+    match backup_state.disable_previous.as_deref() {
+        Some(contents) => {
+            let _ = atomic_write_root_owned(disable_path, contents);
+        }
+        None => {
+            let _ = fs::remove_file(disable_path);
+        }
+    }
+}
+
+fn is_generated_cloud_init_network(contents: &str, interface: &str) -> bool {
+    let preamble = contents.lines().take(8).collect::<Vec<_>>().join(" ").to_ascii_lowercase();
+    preamble.contains("generated")
+        && preamble.contains("datasource")
+        && contents
+            .lines()
+            .any(|line| line.trim() == format!("{interface}:"))
 }
 
 fn render_netplan(
@@ -615,6 +722,37 @@ mod tests {
         assert!(rendered.contains("to: 0.0.0.0/0"));
         assert!(rendered.contains("to: ::/0"));
         assert!(rendered.contains("- 1.1.1.1"));
+    }
+
+    #[test]
+    fn interface_selection_prefers_default_route_and_has_single_nic_fallback() {
+        let routes = "Iface Destination Gateway Flags\nens3 00000000 00000000 0003\n";
+        assert_eq!(
+            select_network_interface(routes, &["eth0".into(), "ens3".into()]),
+            Some("ens3".into())
+        );
+        assert_eq!(
+            select_network_interface("Iface Destination Gateway Flags\n", &["lo".into(), "eth0".into()]),
+            Some("eth0".into())
+        );
+        assert_eq!(
+            select_network_interface(
+                "Iface Destination Gateway Flags\n",
+                &["lo".into(), "eth0".into(), "eth1".into()]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn only_cloud_init_generated_config_for_the_selected_nic_is_claimed() {
+        let generated = "# This file is generated from information provided by the datasource.\nnetwork:\n  ethernets:\n    eth0:\n      dhcp4: true\n";
+        assert!(is_generated_cloud_init_network(generated, "eth0"));
+        assert!(!is_generated_cloud_init_network(generated, "ens3"));
+        assert!(!is_generated_cloud_init_network(
+            "# administrator managed\nnetwork:\n  ethernets:\n    eth0:\n",
+            "eth0"
+        ));
     }
 
     #[test]

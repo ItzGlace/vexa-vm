@@ -3,6 +3,20 @@
 All notable changes to Vexa-VM are documented here. The project follows Semantic Versioning after
 the first stable release.
 
+## 0.1.6 - 2026-08-18
+
+### Fixed
+
+- Reconcile routed public IPv4 `/32` routes immediately when an address is assigned, moved, or
+  released, and remove stale per-VM host routes during periodic convergence.
+- Safely adopt unambiguous routed topology metadata for legacy libvirt imports so migrated VMs no
+  longer fall outside network reconciliation.
+- Keep Linux routed guests' public primary address as their outbound source while retaining the
+  link-local gateway as an explicit on-link route.
+- Allow the hardened Linux Vexa Guest Tools service to open its virtio serial channel.
+- Let Guest Tools identify the sole non-loopback NIC when a broken guest has no default route, and
+  safely take ownership of cloud-init-generated netplan configuration with rollback on failure.
+
 ## 0.1.5 - 2026-08-13
 
 ### Added

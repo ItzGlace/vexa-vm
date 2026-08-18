@@ -19,7 +19,7 @@ use tokio::{process::Command, time::timeout};
 use crate::{
     config::HypervisorMode,
     error::{AppError, AppResult},
-    models::{AddressFamily, IpScope, NewVm, Vm},
+    models::{AddressFamily, IpScope, NewVm, Vm, VmPatch},
     state::AppState,
 };
 
@@ -224,8 +224,101 @@ pub fn plan(vm: &Vm) -> AppResult<Option<RoutedIpv4>> {
     }))
 }
 
+/// Return the persisted routed plan, adopting only an unambiguous legacy
+/// libvirt topology. Older Vexa imports predate `routed_network` metadata, so
+/// they otherwise never receive host-route reconciliation after an IP change.
+pub async fn effective_plan(state: &AppState, vm: &Vm) -> AppResult<Option<RoutedIpv4>> {
+    if let Some(plan) = plan(vm)? {
+        return Ok(Some(plan));
+    }
+    if vm.metadata.get("imported_from_libvirt").and_then(Value::as_bool) != Some(true) {
+        return Ok(None);
+    }
+    let (Some(bridge), Some(tap)) = (vm.bridge.as_deref(), vm.tap_name.as_deref()) else {
+        return Ok(None);
+    };
+    validate_interface_name(bridge)?;
+    validate_interface_name(tap)?;
+    if !bridge.starts_with("kbr-")
+        || !tap.starts_with("tap-")
+        || !Path::new("/sys/class/net").join(bridge).join("bridge").is_dir()
+        || !interface_exists(tap)
+    {
+        return Ok(None);
+    }
+    let master = std::fs::read_link(Path::new("/sys/class/net").join(tap).join("master"))?;
+    if master.file_name().and_then(|name| name.to_str()) != Some(bridge) {
+        return Ok(None);
+    }
+    let output = run_ip(&["-4", "-o", "address", "show", "dev", bridge]).await?;
+    let mut gateways = output
+        .split_whitespace()
+        .filter_map(|field| field.split_once('/'))
+        .filter(|(_, prefix)| *prefix == "30")
+        .filter_map(|(address, _)| address.parse::<Ipv4Addr>().ok())
+        .filter(Ipv4Addr::is_link_local)
+        .collect::<BTreeSet<_>>();
+    if gateways.len() != 1 {
+        return Ok(None);
+    }
+    let gateway = gateways.pop_first().expect("one gateway was checked");
+    if u32::from(gateway) & 3 != 1 {
+        return Ok(None);
+    }
+    let guest_address = Ipv4Addr::from(u32::from(gateway) + 1);
+    let public_interface = match state.config.public_interface.clone() {
+        Some(interface) => interface,
+        None => state
+            .host_info
+            .read()
+            .await
+            .primary_interface
+            .clone()
+            .ok_or_else(|| AppError::Configuration("could not detect the public interface".into()))?,
+    };
+    validate_interface_name(&public_interface)?;
+    if !interface_exists(&public_interface) {
+        return Err(AppError::Configuration(format!(
+            "public interface '{public_interface}' does not exist"
+        )));
+    }
+    let mtu = std::fs::read_to_string(Path::new("/sys/class/net").join(bridge).join("mtu"))
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|value| (576..=9000).contains(value))
+        .unwrap_or(1500);
+    let mut metadata = vm
+        .metadata
+        .as_object()
+        .cloned()
+        .ok_or_else(|| AppError::Configuration("VM metadata must be a JSON object".into()))?;
+    metadata.insert(
+        "routed_network".into(),
+        json!({
+            "managed_by": MANAGER,
+            "version": 1,
+            "adopted_legacy_import": true,
+            "bridge": bridge,
+            "tap": tap,
+            "guest_address": guest_address,
+            "gateway": gateway,
+            "prefix_length": 30,
+            "public_interface": public_interface,
+            "mtu": mtu,
+        }),
+    );
+    let adopted = state.db.patch_vm(
+        &vm.id,
+        &VmPatch {
+            metadata: Some(Value::Object(metadata)),
+            ..VmPatch::default()
+        },
+    )?;
+    plan(&adopted)
+}
+
 pub async fn reconcile_vm(state: &AppState, vm: &Vm) -> AppResult<bool> {
-    let Some(plan) = plan(vm)? else {
+    let Some(plan) = effective_plan(state, vm).await? else {
         return Ok(false);
     };
     if !interface_exists(&plan.public_interface) {
@@ -305,11 +398,16 @@ pub async fn reconcile_vm(state: &AppState, vm: &Vm) -> AppResult<bool> {
     ])
     .await?;
 
+    let mut desired = BTreeSet::new();
     for address in state.db.vm_ip_addresses(&vm.id)? {
         if address.family != AddressFamily::V4 || address.scope != IpScope::Public {
             continue;
         }
-        ensure_public_route(&address.address, &plan.bridge).await?;
+        desired.insert(address.address.clone());
+    }
+    reconcile_public_routes(&desired, &plan.bridge).await?;
+    for address in desired {
+        ensure_public_route(&address, &plan.bridge).await?;
     }
     Ok(true)
 }
@@ -454,6 +552,29 @@ async fn ensure_public_route(address: &str, bridge: &str) -> AppResult<()> {
     )))
 }
 
+async fn reconcile_public_routes(desired: &BTreeSet<String>, bridge: &str) -> AppResult<()> {
+    let output = run_ip(&["-4", "-o", "route", "show", "dev", bridge]).await?;
+    for destination in managed_host_route_destinations(&output) {
+        if !desired.contains(&destination.to_string()) {
+            let route = format!("{destination}/32");
+            run_ip(&["route", "del", &route, "dev", bridge]).await?;
+        }
+    }
+    Ok(())
+}
+
+fn managed_host_route_destinations(output: &str) -> BTreeSet<Ipv4Addr> {
+    output
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter_map(|destination| match destination.split_once('/') {
+            Some((address, "32")) => address.parse::<Ipv4Addr>().ok(),
+            Some(_) => None,
+            None => destination.parse::<Ipv4Addr>().ok(),
+        })
+        .collect()
+}
+
 fn route_line_matches(line: &str, address: &str, destination: &str, bridge: &str) -> bool {
     let fields = line.split_whitespace().collect::<Vec<_>>();
     matches!(fields.first().copied(), Some(value) if value == address || value == destination)
@@ -529,5 +650,20 @@ mod tests {
             "203.0.113.74/32",
             "kbr-vx005515bd",
         ));
+    }
+
+    #[test]
+    fn stale_route_parser_only_returns_host_routes() {
+        let routes = "169.254.0.80/30 proto kernel scope link src 169.254.0.81\n\
+                      94.182.147.91 dev kbr-test scope link\n\
+                      94.182.147.107/32 dev kbr-test scope link\n\
+                      203.0.113.0/24 dev kbr-test scope link\n";
+        assert_eq!(
+            managed_host_route_destinations(routes),
+            BTreeSet::from([
+                "94.182.147.91".parse().unwrap(),
+                "94.182.147.107".parse().unwrap(),
+            ])
+        );
     }
 }

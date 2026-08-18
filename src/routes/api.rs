@@ -2250,7 +2250,13 @@ pub async fn patch_ip_address(
     } else {
         return Err(AppError::Validation("status or vm_id is required".into()));
     };
-    let affected_vm_id = input.vm_id.as_deref().or(previous_vm_id.as_deref());
+    reconcile_routed_after_address_change(
+        &state,
+        previous_vm_id.as_deref(),
+        record.assigned_vm_id.as_deref(),
+    )
+    .await?;
+    let affected_vm_id = record.assigned_vm_id.as_deref().or(previous_vm_id.as_deref());
     let network_security = reconcile_ownership_after_address_change(&state, affected_vm_id).await?;
     let guest_tools = if let Some(vm_id) = affected_vm_id {
         let vm = required_vm(&state, vm_id)?;
@@ -2303,6 +2309,12 @@ pub async fn assign_ip_address(
     let address = state
         .db
         .assign_ip(&current.address, &input.vm_id, input.primary)?;
+    reconcile_routed_after_address_change(
+        &state,
+        current.assigned_vm_id.as_deref(),
+        address.assigned_vm_id.as_deref(),
+    )
+    .await?;
     let network_security = reconcile_ownership_after_address_change(&state, Some(&input.vm_id)).await?;
     let vm = required_vm(&state, &input.vm_id)?;
     let guest_tools = crate::services::guest_tools::apply_network_inventory(&state, &vm).await?;
@@ -2336,6 +2348,7 @@ pub async fn release_ip_address(
         .ok_or_else(|| AppError::NotFound("IP address".into()))?;
     let previous_vm_id = current.assigned_vm_id.clone();
     let address = state.db.release_ip(&current.address)?;
+    reconcile_routed_after_address_change(&state, previous_vm_id.as_deref(), None).await?;
     let network_security =
         reconcile_ownership_after_address_change(&state, previous_vm_id.as_deref()).await?;
     let guest_tools = if let Some(vm_id) = previous_vm_id.as_deref() {
@@ -4929,6 +4942,30 @@ async fn reconcile_ownership_after_address_change(
     crate::services::firewall::reconcile_vm_fail_closed(state, &vm)
         .await
         .map(Some)
+}
+
+/// Converge dedicated routed bridges before applying firewall and guest state.
+/// The old owner is reconciled first so a moved `/32` is released before the
+/// new owner claims it. API response bodies remain unchanged.
+async fn reconcile_routed_after_address_change(
+    state: &AppState,
+    previous_vm_id: Option<&str>,
+    current_vm_id: Option<&str>,
+) -> AppResult<()> {
+    let mut vm_ids = Vec::new();
+    if let Some(vm_id) = previous_vm_id {
+        vm_ids.push(vm_id);
+    }
+    if let Some(vm_id) = current_vm_id {
+        if !vm_ids.contains(&vm_id) {
+            vm_ids.push(vm_id);
+        }
+    }
+    for vm_id in vm_ids {
+        let vm = required_vm(state, vm_id)?;
+        crate::services::routed_network::reconcile_vm(state, &vm).await?;
+    }
+    Ok(())
 }
 
 const MAX_MATERIALIZED_POOL_ADDRESSES: u128 = 4096;

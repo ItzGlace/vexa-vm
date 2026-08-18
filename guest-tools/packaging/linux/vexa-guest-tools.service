@@ -17,6 +17,7 @@ Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectClock=true
+DeviceAllow=/dev/virtio-ports/com.vexa.guest_tools.0 rw
 ProtectControlGroups=true
 ProtectHome=read-only
 ProtectKernelLogs=true
