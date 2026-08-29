@@ -3,7 +3,7 @@
 All notable changes to Vexa-VM are documented here. The project follows Semantic Versioning after
 the first stable release.
 
-## 0.1.7 - 2026-08-29
+## 1.7.0 - 2026-08-29
 
 ### Security
 
