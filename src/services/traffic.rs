@@ -13,6 +13,10 @@ use crate::{
     state::AppState,
 };
 
+/// Safe quota assigned to legacy/unconfigured VMs unless the node's main
+/// administrator has explicitly enabled unlimited traffic.
+pub const DEFAULT_ENFORCED_TRAFFIC_QUOTA_BYTES: u64 = 1_099_511_627_776;
+
 #[derive(Clone, Debug, Serialize)]
 pub struct TrafficQuotaStatus {
     pub limit_bytes: Option<u64>,
@@ -25,7 +29,27 @@ pub struct TrafficQuotaStatus {
 }
 
 pub fn is_exceeded(limit_bytes: Option<u64>, used_bytes: u64) -> bool {
-    limit_bytes.is_some_and(|limit| limit > 0 && used_bytes > limit)
+    limit_bytes.is_some_and(|limit| limit > 0 && used_bytes >= limit)
+}
+
+pub fn unlimited_allowed(state: &AppState) -> AppResult<bool> {
+    Ok(state
+        .setting_bool("network", "allow_unlimited_traffic")?
+        .unwrap_or(false))
+}
+
+pub fn enforced_default_limit(state: &AppState) -> AppResult<u64> {
+    Ok(state
+        .setting_u64("network", "default_traffic_quota_bytes")?
+        .filter(|limit| *limit > 0)
+        .unwrap_or(DEFAULT_ENFORCED_TRAFFIC_QUOTA_BYTES))
+}
+
+pub fn validate_limit(state: &AppState, limit: Option<u64>) -> AppResult<()> {
+    if limit.filter(|value| *value > 0).is_none() && !unlimited_allowed(state)? {
+        return Err(AppError::Forbidden);
+    }
+    Ok(())
 }
 
 pub fn quota_status(state: &AppState, vm: &Vm) -> AppResult<TrafficQuotaStatus> {
@@ -57,20 +81,33 @@ pub(crate) async fn reconcile_vm_locked(
     vm_id: &str,
     force: bool,
 ) -> AppResult<TrafficQuotaStatus> {
-    let vm = state
+    let mut vm = state
         .db
         .get_vm(vm_id)?
         .ok_or_else(|| AppError::NotFound("VM".into()))?;
+    if vm.traffic_limit_bytes.filter(|limit| *limit > 0).is_none() && !unlimited_allowed(state)? {
+        vm = state.db.patch_vm(
+            &vm.id,
+            &crate::models::VmPatch {
+                traffic_limit_bytes: Some(Some(enforced_default_limit(state)?)),
+                ..crate::models::VmPatch::default()
+            },
+        )?;
+    }
     let existing = state.db.vm_traffic_enforcement(&vm.id)?;
     let currently_blocked = existing.as_ref().is_some_and(|record| record.blocked);
     let should_block = is_exceeded(vm.traffic_limit_bytes, vm.traffic_used_bytes);
-    let needs_transition = should_block != currently_blocked || (force && should_block);
+    // A stored flag is not proof of enforcement: a host/network restart or an
+    // external link change can bring a blocked TAP back up. Reassert every
+    // blocked quota on every sweep, not only once at process startup.
+    let needs_transition = should_block != currently_blocked || should_block || (force && currently_blocked);
 
     if needs_transition {
         let enabled = !should_block;
         match state.hypervisor.set_network_enabled(&vm.name, enabled).await {
             Ok(()) => {
                 state.db.set_vm_traffic_enforcement(&vm.id, should_block, None)?;
+                crate::services::firewall::reconcile(state).await?;
             }
             Err(error) => {
                 let message = error.to_string();
@@ -127,14 +164,14 @@ mod tests {
     use super::is_exceeded;
 
     #[test]
-    fn zero_and_null_are_unlimited() {
+    fn zero_and_null_do_not_self_enforce() {
         assert!(!is_exceeded(None, u64::MAX));
         assert!(!is_exceeded(Some(0), u64::MAX));
     }
 
     #[test]
     fn quota_blocks_only_after_threshold_is_exceeded() {
-        assert!(!is_exceeded(Some(100), 100));
+        assert!(is_exceeded(Some(100), 100));
         assert!(is_exceeded(Some(100), 101));
     }
 }

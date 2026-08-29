@@ -604,7 +604,11 @@ Only these top-level sections are writable:
   `sample_interval_seconds`, `metrics_retention_days`, `cpu_overcommit_ratio`,
   and `memory_overcommit_ratio`;
 - `network`: `default_bridge`, `default_port_limit_mbps`,
-  `default_traffic_quota_bytes`, and `dns_servers`;
+  `default_traffic_quota_bytes`, `allow_unlimited_traffic`, and `dns_servers`.
+  Unlimited traffic is disabled by default and can only be enabled globally by
+  a signed-in `super_admin`; API keys and delegated administrators cannot
+  authorize it. When disabled, legacy zero/null VM quotas are replaced by the
+  positive node default (1 TiB if no valid default was previously configured);
 - `console`: `vnc_enabled`;
 - `security`: `session_lifetime_minutes`, `login_rate_limit`, and
   `api_rate_limit`.

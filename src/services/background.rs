@@ -828,6 +828,15 @@ async fn execute_job(state: &AppState, job: &Job) -> AppResult<Value> {
                     Some(build_cloud_init_seed(state, required_vm(state, job)?, None, None).await?);
             }
             let mut info = state.hypervisor.create_vm(request).await?;
+            for attempt in 0..20 {
+                info = state.hypervisor.get_vm(&info.name).await?;
+                if info.interface_name.is_some() {
+                    break;
+                }
+                if attempt < 19 {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
             sync_vm_info(state, job.vm_id.as_deref(), &info)?;
             let vm = required_vm(state, job)?;
             ensure_vm_network_policy(state, &vm).await?;
@@ -2542,6 +2551,12 @@ async fn ensure_vm_network_policy(state: &AppState, vm: &crate::models::Vm) -> A
     }
     if !crate::services::firewall::vm_policy_enabled(state, &vm.id)? {
         return Ok(());
+    }
+    if vm.tap_name.is_none() {
+        return Err(AppError::Conflict(
+            "VM network protection requires a detected host interface; migrate the legacy interface before starting the VM"
+                .into(),
+        ));
     }
     crate::services::firewall::reconcile_vm_fail_closed(state, vm).await?;
     Ok(())

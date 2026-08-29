@@ -276,7 +276,8 @@ fn seed_default_settings(db: &Database, config: &Config, host: &HostInfo) -> App
             json!({
                 "default_bridge": config.network_bridge.clone(),
                 "default_port_limit_mbps": 10_000,
-                "default_traffic_quota_bytes": null,
+                "default_traffic_quota_bytes": crate::services::traffic::DEFAULT_ENFORCED_TRAFFIC_QUOTA_BYTES,
+                "allow_unlimited_traffic": false,
                 "dns_servers": default_dns_servers,
             }),
         ),

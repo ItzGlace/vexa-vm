@@ -3,6 +3,23 @@
 All notable changes to Vexa-VM are documented here. The project follows Semantic Versioning after
 the first stable release.
 
+## 0.1.7 - 2026-08-29
+
+### Security
+
+- Enforce finite traffic allowances in-kernel with a shared nftables byte quota across ingress and
+  egress, independently of optional VM firewall and DDoS switches.
+- Reassert over-quota link shutdown every five seconds and persist the down state in both live and
+  saved libvirt definitions, preventing host restarts or external link changes from reopening access.
+- Disable unlimited VM traffic by default. Only a signed-in super administrator can enable it at
+  node level; otherwise legacy zero/null allowances receive a positive 1 TiB fallback quota.
+
+### Fixed
+
+- Treat reaching the configured byte limit as exhausted instead of waiting for one additional byte.
+- Persist detected TAP names during VM updates and return deterministic libvirt TAP targets during
+  first provisioning, preserving fail-closed network policy across stopped-domain creation races.
+
 ## 0.1.6 - 2026-08-18
 
 ### Fixed

@@ -80,7 +80,8 @@
         <div class="mt-6 grid gap-5 sm:grid-cols-2">
           <label><span class="label">Default bridge</span><input name="default_bridge" class="field font-mono" maxlength="15" required></label>
           <label><span class="label">Default port speed (Mbit/s)</span><input name="default_port_limit_mbps" type="number" min="1" max="100000" class="field" required></label>
-          <label><span class="label">Default traffic allowance (GiB)</span><input name="default_traffic_quota_gb" type="number" min="0" class="field"><span class="mt-1.5 block text-xs text-slate-600">0 means unlimited. Positive values disable VM networking after the allowance is exceeded.</span></label>
+          <label><span class="label">Default traffic allowance (GiB)</span><input name="default_traffic_quota_gb" type="number" min="1" class="field" required><span class="mt-1.5 block text-xs text-slate-600">A positive allowance is mandatory unless the main administrator explicitly enables unlimited traffic.</span></label>
+          <label class="sm:col-span-2 flex items-start gap-3 rounded-xl border border-amber-300/15 bg-amber-300/[.03] p-4"><input name="allow_unlimited_traffic" type="checkbox" class="mt-1"><span><span class="block text-sm text-white">Allow unlimited VM traffic</span><span class="mt-1 block text-xs leading-5 text-slate-500">Main-administrator approval only. Disabled by default; when disabled, legacy zero/null quotas are assigned the positive node default automatically.</span></span></label>
           <label class="sm:col-span-2"><span class="label">Default DNS servers</span><textarea name="dns_servers" class="field min-h-24 resize-y font-mono" placeholder="One IPv4 or IPv6 address per line"></textarea></label>
         </div>
         <div class="mt-6 flex justify-end"><button class="btn-primary" type="submit">Save network defaults</button></div>

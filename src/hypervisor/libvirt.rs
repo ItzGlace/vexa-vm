@@ -890,7 +890,23 @@ impl Hypervisor for LibvirtHypervisor {
             let _ = tokio::fs::remove_file(&disk_path).await;
             return Err(error);
         }
-        self.inspect_vm(&request.name).await
+        let mut info = self.inspect_vm(&request.name).await?;
+        if info.interface_name.is_none() {
+            if let Some(tap_name) = request.tap_name.as_deref() {
+                info.interface_name = Some(tap_name.to_owned());
+                info.interface_type = Some("ethernet".into());
+            } else {
+                info.interface_name = Some(stable_tap_name(&request.mac_address)?);
+                info.interface_type = Some("bridge".into());
+                info.bridge = Some(
+                    request
+                        .bridge
+                        .clone()
+                        .unwrap_or_else(|| self.config.default_bridge.clone()),
+                );
+            }
+        }
+        Ok(info)
     }
 
     async fn delete_vm(&self, name: &str, delete_storage: bool) -> HypervisorResult<()> {
@@ -1402,6 +1418,22 @@ impl Hypervisor for LibvirtHypervisor {
             })?;
             let tuntaps = self.ip("inspect-persistent-tap", &["tuntap", "show"]).await?;
             validate_persistent_tap(&tuntaps, interface)?;
+            let mac = current.mac_address.as_deref().ok_or_else(|| {
+                HypervisorError::InvalidResponse("legacy ethernet VM has no network interface MAC".into())
+            })?;
+            let link_state = if enabled { "up" } else { "down" };
+            self.virsh(
+                "set-persistent-network-link",
+                &["domif-setlink", name, mac, link_state, "--config"],
+            )
+            .await?;
+            if current.state.is_active() {
+                self.virsh(
+                    "set-live-network-link",
+                    &["domif-setlink", name, mac, link_state],
+                )
+                .await?;
+            }
             self.ip(
                 "set-persistent-tap-link",
                 &[
@@ -1409,7 +1441,7 @@ impl Hypervisor for LibvirtHypervisor {
                     "set",
                     "dev",
                     interface,
-                    if enabled { "up" } else { "down" },
+                    link_state,
                 ],
             )
             .await?;

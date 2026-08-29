@@ -3161,7 +3161,8 @@
         "properties": {
           "default_bridge": { "type": "string", "minLength": 1, "maxLength": 15, "pattern": "^[A-Za-z0-9_.-]+$", "description": "Default for later VM provisioning; does not create or reconfigure a host bridge." },
           "default_port_limit_mbps": { "type": "integer", "minimum": 1, "maximum": 100000 },
-          "default_traffic_quota_bytes": { "type": ["integer", "null"], "format": "int64", "minimum": 0, "description": "Default enforced allowance for new VMs; zero/null is unlimited." },
+          "default_traffic_quota_bytes": { "type": ["integer", "null"], "format": "int64", "minimum": 0, "description": "Default enforced allowance for new VMs. Must be positive unless the main administrator enables unlimited traffic." },
+          "allow_unlimited_traffic": { "type": "boolean", "description": "Main-administrator-controlled node policy. False by default; when false, zero/null VM quotas are replaced by the positive node default." },
           "dns_servers": { "type": "array", "maxItems": 32, "items": { "type": "string", "format": "ip" } }
         },
         "additionalProperties": false

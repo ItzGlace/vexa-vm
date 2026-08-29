@@ -901,6 +901,9 @@ pub async fn patch_vm(
         crate::hypervisor::validate_resize_request(&resize)?;
     }
     let traffic_limit_changed = input.traffic_limit_bytes.is_some();
+    if let Some(limit) = input.traffic_limit_bytes.as_ref() {
+        crate::services::traffic::validate_limit(&state, *limit)?;
+    }
     let patch = VmPatch {
         hostname: input.hostname,
         description: input.description,
@@ -3301,6 +3304,10 @@ pub async fn update_settings(
             .get_setting(key)?
             .map(|record| record.value)
             .unwrap_or_else(|| json!({}));
+        let previous_unlimited = merged
+            .get("allow_unlimited_traffic")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let merged_object = merged
             .as_object_mut()
             .ok_or_else(|| AppError::Internal(format!("stored setting section '{key}' is not an object")))?;
@@ -3311,6 +3318,29 @@ pub async fn update_settings(
         validate_setting_section(key, &merged)?;
         if key == "general" {
             validate_capacity_policy_change(&state, &merged).await?;
+        }
+        if key == "network" {
+            let unlimited = merged
+                .get("allow_unlimited_traffic")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if unlimited != previous_unlimited
+                && auth
+                    .admin
+                    .as_ref()
+                    .map_or(true, |admin| admin.role != AdminRole::SuperAdmin)
+            {
+                return Err(AppError::Forbidden);
+            }
+            let default_quota = merged
+                .get("default_traffic_quota_bytes")
+                .and_then(Value::as_u64)
+                .filter(|limit| *limit > 0);
+            if !unlimited && default_quota.is_none() {
+                return Err(AppError::Validation(
+                    "a positive default traffic quota is required while unlimited traffic is disabled".into(),
+                ));
+            }
         }
         merged_values.insert(key.clone(), merged);
     }
@@ -3418,6 +3448,7 @@ fn validate_setting_section(section: &str, value: &Value) -> AppResult<()> {
             "default_bridge",
             "default_port_limit_mbps",
             "default_traffic_quota_bytes",
+            "allow_unlimited_traffic",
             "dns_servers",
         ],
         "console" => &["vnc_enabled"],
@@ -3508,6 +3539,14 @@ fn validate_setting_section(section: &str, value: &Value) -> AppResult<()> {
                         "network.default_traffic_quota_bytes must be a non-negative integer or null".into(),
                     ));
                 }
+            }
+            if object
+                .get("allow_unlimited_traffic")
+                .is_some_and(|value| !value.is_boolean())
+            {
+                return Err(AppError::Validation(
+                    "network.allow_unlimited_traffic must be boolean".into(),
+                ));
             }
             validate_string_array(object.get("dns_servers"), "network.dns_servers", true)?;
         }
@@ -4465,6 +4504,13 @@ fn apply_vm_defaults(state: &AppState, input: &mut CreateVmBody) -> AppResult<()
     }
     if input.spec.traffic_limit_bytes.is_none() {
         input.spec.traffic_limit_bytes = state.setting_u64("network", "default_traffic_quota_bytes")?;
+    }
+    if input.spec.traffic_limit_bytes.filter(|limit| *limit > 0).is_none() {
+        if crate::services::traffic::unlimited_allowed(state)? {
+            input.spec.traffic_limit_bytes = None;
+        } else {
+            input.spec.traffic_limit_bytes = Some(crate::services::traffic::enforced_default_limit(state)?);
+        }
     }
     if input.spec.bridge.is_none() {
         input.spec.bridge = state

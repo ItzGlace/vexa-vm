@@ -344,10 +344,15 @@ fn render_ruleset(
         .iter()
         .filter(|item| {
             item.vm.libvirt_uuid.is_some()
+                && (item.vm.tap_name.is_some()
+                    || item.vm.state != crate::models::VmState::Stopped
+                    || item.profile.firewall_enabled
+                    || item.profile.ddos_enabled)
                 && (item.profile.firewall_enabled
                     || item.profile.ddos_enabled
                     || ownership_guard_active
-                    || bcp38_enabled)
+                    || bcp38_enabled
+                    || item.vm.traffic_limit_bytes.is_some_and(|limit| limit > 0))
         })
         .collect::<Vec<_>>();
     if active.is_empty() {
@@ -363,6 +368,18 @@ fn render_ruleset(
         script.push_str(&format!("delete table {TABLE_FAMILY} {TABLE_NAME}\n"));
     }
     script.push_str(&format!("table {TABLE_FAMILY} {TABLE_NAME} {{\n"));
+    for (index, item) in active.iter().enumerate() {
+        if let Some(limit) = item
+            .vm
+            .traffic_limit_bytes
+            .filter(|limit| *limit > item.vm.traffic_used_bytes)
+        {
+            script.push_str(&format!(
+                "  quota vm{index}_traffic {{ over {limit} bytes used {} bytes; }}\n",
+                item.vm.traffic_used_bytes,
+            ));
+        }
+    }
     script.push_str("  chain forward { type filter hook forward priority -10; policy accept;\n");
     for (index, item) in active.iter().enumerate() {
         let interface = validated_interface_name(item.vm.tap_name.as_deref())?;
@@ -401,7 +418,16 @@ fn render_ruleset(
 
     for (index, item) in active.iter().enumerate() {
         let compiled = compile_vm_network_policy(&item.profile, &item.rules)?;
+        let quota_exceeded = crate::services::traffic::is_exceeded(
+            item.vm.traffic_limit_bytes,
+            item.vm.traffic_used_bytes,
+        );
         script.push_str(&format!("  chain vm{index}_ingress {{\n"));
+        if quota_exceeded {
+            script.push_str("    counter drop\n");
+        } else if item.vm.traffic_limit_bytes.is_some_and(|limit| limit > 0) {
+            script.push_str(&format!("    quota name \"vm{index}_traffic\" counter drop\n"));
+        }
         if ownership_guard_active {
             render_ip_ownership_guard(
                 &mut script,
@@ -431,6 +457,11 @@ fn render_ruleset(
         script.push_str("  }\n");
 
         script.push_str(&format!("  chain vm{index}_egress {{\n"));
+        if quota_exceeded {
+            script.push_str("    counter drop\n");
+        } else if item.vm.traffic_limit_bytes.is_some_and(|limit| limit > 0) {
+            script.push_str(&format!("    quota name \"vm{index}_traffic\" counter drop\n"));
+        }
         if ownership_guard_active {
             render_ip_ownership_guard(
                 &mut script,
@@ -903,6 +934,47 @@ mod tests {
             ipv6: vec![],
         }];
         assert_eq!(render_ruleset(&desired, false, false, &[], false).unwrap(), "");
+    }
+
+    #[test]
+    fn exceeded_quota_is_dropped_even_when_optional_firewall_is_disabled() {
+        let mut over_quota = vm();
+        over_quota.traffic_limit_bytes = Some(100);
+        over_quota.traffic_used_bytes = 100;
+        let desired = vec![DesiredVmPolicy {
+            vm: over_quota,
+            profile: profile(false),
+            rules: vec![],
+            ipv4: vec![],
+            ipv6: vec![],
+        }];
+        let script = render_ruleset(&desired, false, false, &[], false).unwrap();
+        assert!(script.contains("table bridge vexa_vm"));
+        assert_eq!(script.matches("counter drop").count(), 2);
+        assert!(script.contains("iifname \"vexa123456\""));
+        assert!(script.contains("oifname \"vexa123456\""));
+    }
+
+    #[test]
+    fn finite_quota_uses_one_shared_kernel_byte_counter_for_both_directions() {
+        let mut finite = vm();
+        finite.traffic_limit_bytes = Some(1_000);
+        finite.traffic_used_bytes = 250;
+        let desired = vec![DesiredVmPolicy {
+            vm: finite,
+            profile: profile(false),
+            rules: vec![],
+            ipv4: vec![],
+            ipv6: vec![],
+        }];
+        let script = render_ruleset(&desired, false, false, &[], false).unwrap();
+        assert!(script.contains("quota vm0_traffic { over 1000 bytes used 250 bytes; }"));
+        assert_eq!(
+            script
+                .matches("quota name \"vm0_traffic\" counter drop")
+                .count(),
+            2
+        );
     }
 
     #[test]

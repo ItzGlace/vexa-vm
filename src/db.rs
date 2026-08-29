@@ -4677,10 +4677,10 @@ fn save_vm(connection: &Connection, vm: &Vm) -> AppResult<()> {
         "UPDATE vms SET
             hostname = ?2, description = ?3, state = ?4, desired_state = ?5,
             vcpus = ?6, memory_mib = ?7, disk_gib = ?8,
-            network_limit_mbps = ?9, traffic_limit_bytes = ?10,
-            traffic_used_bytes = ?11, guest_agent = ?12, autostart = ?13,
-            timezone = ?14, libvirt_uuid = ?15, vnc_display = ?16,
-            metadata_json = ?17, updated_at = ?18
+            tap_name = ?9, network_limit_mbps = ?10, traffic_limit_bytes = ?11,
+            traffic_used_bytes = ?12, guest_agent = ?13, autostart = ?14,
+            timezone = ?15, libvirt_uuid = ?16, vnc_display = ?17,
+            metadata_json = ?18, updated_at = ?19
          WHERE id = ?1",
         params![
             vm.id,
@@ -4691,6 +4691,7 @@ fn save_vm(connection: &Connection, vm: &Vm) -> AppResult<()> {
             i64::from(vm.vcpus),
             checked_i64(vm.memory_mib, "memory_mib")?,
             checked_i64(vm.disk_gib, "disk_gib")?,
+            vm.tap_name,
             optional_i64(vm.network_limit_mbps, "network_limit_mbps")?,
             optional_i64(vm.traffic_limit_bytes, "traffic_limit_bytes")?,
             checked_i64(vm.traffic_used_bytes, "traffic_used_bytes")?,
@@ -5688,11 +5689,16 @@ mod tests {
                 &VmPatch {
                     state: Some(VmState::Running),
                     memory_mib: Some(4096),
+                    tap_name: Some(Some("vexa-persisted".into())),
                     ..VmPatch::default()
                 },
             )
             .unwrap();
         assert_eq!(database.get_vm(&vm.id).unwrap().unwrap().memory_mib, 4096);
+        assert_eq!(
+            database.get_vm(&vm.id).unwrap().unwrap().tap_name.as_deref(),
+            Some("vexa-persisted")
+        );
     }
 
     #[test]
