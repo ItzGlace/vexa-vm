@@ -3,6 +3,17 @@
 All notable changes to Vexa-VM are documented here. The project follows Semantic Versioning after
 the first stable release.
 
+## 0.1.9 - 2026-09-02
+
+### Fixed
+
+- Create routed persistent TAP devices with Linux `IFF_MULTI_QUEUE` and `vnet_hdr` support so the
+  VirtIO multiqueue definition introduced in 0.1.8 can start on every VM size.
+- Automatically replace legacy single-queue TAP devices for creating, stopped and failed guests;
+  running guests remain online and are migrated safely on their next start.
+- Permit configured libvirt image subdirectories in the hardened systemd filesystem policy,
+  preventing migrated storage layouts from failing cloud-init seed writes during provisioning.
+
 ## 0.1.8 - 2026-09-01
 
 ### Added

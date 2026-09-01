@@ -361,7 +361,42 @@ pub async fn reconcile_vm(state: &AppState, vm: &Vm) -> AppResult<bool> {
     .await?;
     ensure_bridge_address(&plan).await?;
 
-    if !interface_exists(&plan.tap) {
+    let mut create_tap = !interface_exists(&plan.tap);
+    if !create_tap {
+        let taps = run_ip(&["tuntap", "show"]).await?;
+        let line = managed_tap_line(&taps, &plan.tap).ok_or_else(|| {
+            AppError::Conflict(format!(
+                "interface '{}' exists but is not a persistent TAP",
+                plan.tap
+            ))
+        })?;
+        if !tap_is_persistent(line) {
+            return Err(AppError::Conflict(format!(
+                "interface '{}' exists but is not a persistent TAP",
+                plan.tap
+            )));
+        }
+
+        // VirtIO multiqueue asks QEMU to open one TAP queue per configured
+        // NIC queue. A persistent TAP created without IFF_MULTI_QUEUE rejects
+        // the second TUNSETIFF call with EINVAL and the domain cannot start.
+        // Never trust a potentially stale database state before replacing a
+        // network device: deleting the TAP of an active domain would sever
+        // its traffic. The authoritative hypervisor state permits an in-place
+        // upgrade only while the domain is absent or inactive.
+        if !tap_supports_multiqueue(line) {
+            let domain_active = match state.hypervisor.get_vm(&vm.name).await {
+                Ok(domain) => domain.state.is_active(),
+                Err(crate::hypervisor::HypervisorError::NotFound(_)) => false,
+                Err(error) => return Err(error.into()),
+            };
+            if !domain_active {
+                delete_managed_tap(&plan.tap, false).await?;
+                create_tap = true;
+            }
+        }
+    }
+    if create_tap {
         run_ip(&[
             "tuntap",
             "add",
@@ -371,20 +406,10 @@ pub async fn reconcile_vm(state: &AppState, vm: &Vm) -> AppResult<bool> {
             "tap",
             "user",
             "libvirt-qemu",
+            "multi_queue",
+            "vnet_hdr",
         ])
         .await?;
-    } else {
-        let taps = run_ip(&["tuntap", "show"]).await?;
-        if !taps.lines().any(|line| {
-            line.split_whitespace().next() == Some(format!("{}:", plan.tap).as_str())
-                && line.split_whitespace().any(|field| field == "tap")
-                && line.split_whitespace().any(|field| field == "persist")
-        }) {
-            return Err(AppError::Conflict(format!(
-                "interface '{}' exists but is not a persistent TAP",
-                plan.tap
-            )));
-        }
     }
     ensure_tap_master(&plan.tap, &plan.bridge).await?;
     run_ip(&[
@@ -417,7 +442,10 @@ pub async fn cleanup_vm(vm: &Vm) -> AppResult<bool> {
         return Ok(false);
     };
     if interface_exists(&plan.tap) {
-        run_ip(&["tuntap", "del", "dev", &plan.tap, "mode", "tap"]).await?;
+        let taps = run_ip(&["tuntap", "show"]).await?;
+        let multiqueue =
+            managed_tap_line(&taps, &plan.tap).is_some_and(tap_supports_multiqueue);
+        delete_managed_tap(&plan.tap, multiqueue).await?;
     }
     if interface_exists(&plan.bridge) {
         run_ip(&["link", "del", "dev", &plan.bridge, "type", "bridge"]).await?;
@@ -427,6 +455,32 @@ pub async fn cleanup_vm(vm: &Vm) -> AppResult<bool> {
 
 fn interface_exists(name: &str) -> bool {
     Path::new("/sys/class/net").join(name).exists()
+}
+
+fn managed_tap_line<'a>(output: &'a str, tap: &str) -> Option<&'a str> {
+    let expected = format!("{tap}:");
+    output
+        .lines()
+        .find(|line| line.split_whitespace().next() == Some(expected.as_str()))
+}
+
+fn tap_is_persistent(line: &str) -> bool {
+    let fields = line.split_whitespace().collect::<BTreeSet<_>>();
+    fields.contains("tap") && fields.contains("persist")
+}
+
+fn tap_supports_multiqueue(line: &str) -> bool {
+    line.split_whitespace().any(|field| field == "multi_queue")
+}
+
+async fn delete_managed_tap(tap: &str, multiqueue: bool) -> AppResult<()> {
+    if multiqueue {
+        run_ip(&["tuntap", "del", "dev", tap, "mode", "tap", "multi_queue"])
+            .await?;
+    } else {
+        run_ip(&["tuntap", "del", "dev", tap, "mode", "tap"]).await?;
+    }
+    Ok(())
 }
 
 fn validate_interface_name(name: &str) -> AppResult<()> {
@@ -655,15 +709,28 @@ mod tests {
     #[test]
     fn stale_route_parser_only_returns_host_routes() {
         let routes = "169.254.0.80/30 proto kernel scope link src 169.254.0.81\n\
-                      94.182.147.91 dev kbr-test scope link\n\
-                      94.182.147.107/32 dev kbr-test scope link\n\
+                      198.51.100.91 dev kbr-test scope link\n\
+                      198.51.100.107/32 dev kbr-test scope link\n\
                       203.0.113.0/24 dev kbr-test scope link\n";
         assert_eq!(
             managed_host_route_destinations(routes),
             BTreeSet::from([
-                "94.182.147.91".parse().unwrap(),
-                "94.182.147.107".parse().unwrap(),
+                "198.51.100.91".parse().unwrap(),
+                "198.51.100.107".parse().unwrap(),
             ])
         );
+    }
+
+    #[test]
+    fn managed_tap_parser_distinguishes_single_and_multiqueue_devices() {
+        let output = "tap-old: tap vnet_hdr persist user 64055\n\
+                      tap-new: tap multi_queue vnet_hdr persist user 64055\n";
+        let old = managed_tap_line(output, "tap-old").unwrap();
+        let new = managed_tap_line(output, "tap-new").unwrap();
+        assert!(tap_is_persistent(old));
+        assert!(tap_is_persistent(new));
+        assert!(!tap_supports_multiqueue(old));
+        assert!(tap_supports_multiqueue(new));
+        assert!(managed_tap_line(output, "tap-missing").is_none());
     }
 }

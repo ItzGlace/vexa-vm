@@ -7,10 +7,10 @@ Guest Tools as the archive.
 ## Install a release package
 
 ```bash
-curl -fLO https://github.com/ItzGlace/vexa-vm/releases/download/v0.1.8/vexa-vm_0.1.8_amd64.deb
-curl -fLO https://github.com/ItzGlace/vexa-vm/releases/download/v0.1.8/vexa-vm_0.1.8_amd64.deb.sha256
-sha256sum -c vexa-vm_0.1.8_amd64.deb.sha256
-sudo apt install ./vexa-vm_0.1.8_amd64.deb
+curl -fLO https://github.com/ItzGlace/vexa-vm/releases/download/v0.1.9/vexa-vm_0.1.9_amd64.deb
+curl -fLO https://github.com/ItzGlace/vexa-vm/releases/download/v0.1.9/vexa-vm_0.1.9_amd64.deb.sha256
+sha256sum -c vexa-vm_0.1.9_amd64.deb.sha256
+sudo apt install ./vexa-vm_0.1.9_amd64.deb
 ```
 
 On a fresh install, the package creates a root-only
@@ -28,7 +28,7 @@ After building the application and both Guest Tools targets:
 ```bash
 ./scripts/package-release.sh x86_64-unknown-linux-gnu dist
 ./scripts/package-deb.sh x86_64-unknown-linux-gnu dist
-dpkg-deb --info dist/vexa-vm_0.1.8_amd64.deb
+dpkg-deb --info dist/vexa-vm_0.1.9_amd64.deb
 ```
 
 ## Publish the signed repository

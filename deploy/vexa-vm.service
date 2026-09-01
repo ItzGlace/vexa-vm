@@ -38,7 +38,10 @@ RestrictRealtime=true
 RestrictSUIDSGID=true
 RemoveIPC=true
 SystemCallArchitectures=native
-ReadWritePaths=/var/lib/vexa-vm /var/lib/libvirt/images/vexa-vm
+# VEXA_VM_STORAGE and VEXA_CLOUD_INIT_STORAGE may point at dedicated
+# subdirectories below libvirt's image root on migrated nodes. Keep the rest
+# of the host read-only while allowing those configured storage layouts.
+ReadWritePaths=/var/lib/vexa-vm /var/lib/libvirt/images
 
 [Install]
 WantedBy=multi-user.target

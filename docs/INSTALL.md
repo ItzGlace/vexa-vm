@@ -21,7 +21,7 @@ Useful environment overrides:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ItzGlace/vexa-vm/main/install.sh | \
-  sudo VEXA_VERSION=v0.1.8 VEXA_BIND=127.0.0.1:8080 VEXA_PUBLIC_URL=https://vm.example.com bash
+  sudo VEXA_VERSION=v0.1.9 VEXA_BIND=127.0.0.1:8080 VEXA_PUBLIC_URL=https://vm.example.com bash
 ```
 
 To enable signed in-panel updates during bootstrap, pin the release publisher's raw 32-byte Ed25519
@@ -71,10 +71,10 @@ sudo apt-get install -y build-essential pkg-config libvirt-daemon-system qemu-kv
   virtinst cloud-image-utils sqlite3 nftables iproute2
 npm ci && npm run build
 cargo build --locked --release
-sudo install -Dm0755 target/release/vexa-vm /opt/vexa-vm/releases/0.1.8/bin/vexa-vm
+sudo install -Dm0755 target/release/vexa-vm /opt/vexa-vm/releases/0.1.9/bin/vexa-vm
 sudo install -Dm0755 target/release/vexa-update-helper \
-  /opt/vexa-vm/releases/0.1.8/bin/vexa-update-helper
-sudo ln -s releases/0.1.8 /opt/vexa-vm/current
+  /opt/vexa-vm/releases/0.1.9/bin/vexa-update-helper
+sudo ln -s releases/0.1.9 /opt/vexa-vm/current
 ```
 
 Copy `templates`, `static`, `migrations`, `deploy`, and `VERSION` into the same versioned release
