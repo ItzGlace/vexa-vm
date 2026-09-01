@@ -350,6 +350,12 @@ pub trait Hypervisor: Send + Sync {
     /// Enable or disable the VM's primary network link in both its persistent
     /// definition and, when running, the live domain.
     async fn set_network_enabled(&self, name: &str, enabled: bool) -> HypervisorResult<()>;
+    /// Ensure persistent VirtIO NIC definitions use multiple vhost queues.
+    /// Running domains adopt the persistent definition at their next reboot.
+    async fn ensure_network_multiqueue(&self, name: &str, queues: u32) -> HypervisorResult<bool> {
+        let _ = (name, queues);
+        Ok(false)
+    }
     /// Send one structured command to the guest agent without placing the
     /// JSON payload (which may contain an encoded credential) in a process
     /// argument. Backends without a guest-agent transport may keep the

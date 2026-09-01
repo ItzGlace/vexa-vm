@@ -1,6 +1,6 @@
 [package]
 name = "vexa-vm"
-version = "1.7.0"
+version = "0.1.8"
 edition = "2021"
 rust-version = "1.75"
 description = "Open-source KVM node management panel and API"

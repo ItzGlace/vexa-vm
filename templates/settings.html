@@ -132,7 +132,7 @@
 
         <article class="panel p-5 sm:p-7" id="administrator-management">
           <div class="flex flex-col gap-4 border-b border-white/[.07] pb-5 sm:flex-row sm:items-center sm:justify-between">
-            <div><h2 class="text-xl font-extralight text-white">Administrators &amp; access levels</h2><p class="mt-1 text-sm text-slate-400">Create individual panel accounts, assign a fixed role, or immediately disable access.</p></div>
+            <div><h2 class="text-xl font-extralight text-white">Administrators &amp; access levels</h2><p class="mt-1 text-sm text-slate-400">Create individual panel accounts and grant only the VM and infrastructure actions each operator needs.</p></div>
             <button type="button" class="btn-primary shrink-0" data-open-admin-dialog>Create administrator</button>
           </div>
           <div class="mt-5 grid gap-3 text-xs leading-5 text-slate-500 sm:grid-cols-3">
@@ -200,6 +200,8 @@
     <div class="mt-6 space-y-5">
       <label><span class="label">Username</span><input name="username" class="field" required maxlength="128" autocomplete="off"></label>
       <label><span class="label">Access level</span><select name="role" class="field" required><option value="admin">Administrator</option><option value="read_only">Read-only auditor</option><option value="super_admin">Super administrator</option></select></label>
+      <label class="flex items-start gap-3 rounded-xl border border-white/[.08] p-3"><input name="use_role_defaults" type="checkbox" class="mt-1" checked><span><span class="block text-sm text-slate-200">Use role defaults</span><span class="mt-1 block text-xs text-slate-500">Turn this off to grant individual capabilities.</span></span></label>
+      <div data-admin-create-permissions class="grid max-h-64 gap-2 overflow-y-auto rounded-xl border border-white/[.08] p-3 sm:grid-cols-2 opacity-40" aria-label="Administrator permissions"></div>
       <label><span class="label">Temporary password</span><input name="password" type="password" class="field" minlength="12" required autocomplete="new-password"></label>
       <label><span class="label">Confirm password</span><input name="confirm_password" type="password" class="field" minlength="12" required autocomplete="new-password"></label>
     </div>

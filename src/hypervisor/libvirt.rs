@@ -458,17 +458,18 @@ impl LibvirtHypervisor {
         disk_path: &Path,
     ) -> HypervisorResult<String> {
         let disk_path = xml_escape(&utf8_path(disk_path)?);
+        let network_queues = request.vcpus.clamp(1, 8);
         let interface = if let Some(tap_name) = request.tap_name.as_deref() {
             validate_bridge_name(tap_name)?;
             format!(
-                "<interface type='ethernet'><mac address='{{mac}}'/><target dev='{}' managed='no'/><model type='virtio'/>{{bandwidth}}</interface>",
+                "<interface type='ethernet'><mac address='{{mac}}'/><target dev='{}' managed='no'/><model type='virtio'/><driver name='vhost' queues='{network_queues}'/>{{bandwidth}}</interface>",
                 xml_escape(tap_name),
             )
         } else {
             let bridge = request.bridge.as_deref().unwrap_or(&self.config.default_bridge);
             validate_bridge_name(bridge)?;
             format!(
-                "<interface type='bridge'><mac address='{{mac}}'/><source bridge='{}'/><target dev='{}'/><model type='virtio'/>{{bandwidth}}</interface>",
+                "<interface type='bridge'><mac address='{{mac}}'/><source bridge='{}'/><target dev='{}'/><model type='virtio'/><driver name='vhost' queues='{network_queues}'/>{{bandwidth}}</interface>",
                 xml_escape(bridge),
                 xml_escape(&stable_tap_name(&request.mac_address)?),
             )
@@ -1467,6 +1468,26 @@ impl Hypervisor for LibvirtHypervisor {
         Ok(())
     }
 
+    async fn ensure_network_multiqueue(&self, name: &str, queues: u32) -> HypervisorResult<bool> {
+        validate_vm_name(name)?;
+        let queues = queues.clamp(1, 8);
+        let _guard = self.mutation_lock.lock().await;
+        let xml = self
+            .virsh("inspect-network-multiqueue", &["dumpxml", name, "--inactive"])
+            .await?;
+        let updated = ensure_virtio_interface_queues(&xml, queues)?;
+        if updated == xml {
+            return Ok(false);
+        }
+        self.virsh_with_input(
+            "define-network-multiqueue",
+            &["define", "/dev/stdin"],
+            updated.as_bytes(),
+        )
+        .await?;
+        Ok(true)
+    }
+
     async fn guest_agent_command(&self, name: &str, command: Value) -> HypervisorResult<Value> {
         self.ensure_domain(name).await?;
         self.qemu_agent_command_private(name, &command).await
@@ -1766,8 +1787,11 @@ fn parse_qga_response(output: &str) -> HypervisorResult<Value> {
 /// statistics. Clamp that fallback to the assigned balloon size.
 fn parse_domain_memory(values: &HashMap<String, String>) -> (Option<u64>, Option<u64>) {
     let kib = |key: &str| values.get(key).and_then(|value| value.parse::<u64>().ok());
-    let total_kib = kib("balloon.available")
-        .or_else(|| kib("balloon.current"))
+    // `balloon.available` is a guest-reported usable-memory estimate and can
+    // be below the configured target even when no ballooning is active. The
+    // libvirt `balloon.current` value is the authoritative balloon target.
+    let total_kib = kib("balloon.current")
+        .or_else(|| kib("balloon.available"))
         .or_else(|| kib("balloon.maximum"));
     let reclaimable_kib = kib("balloon.usable").or_else(|| kib("balloon.unused"));
     let used_kib = total_kib
@@ -1837,6 +1861,74 @@ fn xml_tag(xml: &str, tag: &str) -> Option<String> {
     )
 }
 
+fn ensure_virtio_interface_queues(xml: &str, queues: u32) -> HypervisorResult<String> {
+    let queues = queues.clamp(1, 8);
+    let mut output = String::with_capacity(xml.len() + 64);
+    let mut cursor = 0;
+    while let Some(relative_start) = xml[cursor..].find("<interface") {
+        let start = cursor + relative_start;
+        output.push_str(&xml[cursor..start]);
+        let relative_end = xml[start..].find("</interface>").ok_or_else(|| {
+            HypervisorError::InvalidResponse("libvirt returned malformed interface XML".into())
+        })?;
+        let end = start + relative_end + "</interface>".len();
+        let block = &xml[start..end];
+        if block.contains("<model type='virtio'") || block.contains("<model type=\"virtio\"") {
+            output.push_str(&ensure_interface_block_queues(block, queues)?);
+        } else {
+            output.push_str(block);
+        }
+        cursor = end;
+    }
+    output.push_str(&xml[cursor..]);
+    Ok(output)
+}
+
+fn ensure_interface_block_queues(block: &str, queues: u32) -> HypervisorResult<String> {
+    let value = queues.to_string();
+    if let Some(driver_start) = block.find("<driver") {
+        let driver_end = block[driver_start..]
+            .find("/>")
+            .map(|offset| driver_start + offset + 2)
+            .ok_or_else(|| HypervisorError::InvalidResponse("libvirt returned malformed NIC driver XML".into()))?;
+        let driver = &block[driver_start..driver_end];
+        let updated_driver = if let Some(queue_start) = driver.find("queues='") {
+            replace_xml_attribute(driver, queue_start + "queues='".len(), '\'', &value)?
+        } else if let Some(queue_start) = driver.find("queues=\"") {
+            replace_xml_attribute(driver, queue_start + "queues=\"".len(), '"', &value)?
+        } else {
+            driver.replacen("/>", &format!(" queues='{value}'/>"), 1)
+        };
+        let mut updated = block.to_owned();
+        updated.replace_range(driver_start..driver_end, &updated_driver);
+        return Ok(updated);
+    }
+    let model_start = block
+        .find("<model")
+        .ok_or_else(|| HypervisorError::InvalidResponse("VirtIO NIC has no model element".into()))?;
+    let model_end = block[model_start..]
+        .find("/>")
+        .map(|end| model_start + end + 2)
+        .ok_or_else(|| HypervisorError::InvalidResponse("VirtIO NIC has malformed model XML".into()))?;
+    let mut updated = block.to_owned();
+    updated.insert_str(model_end, &format!("<driver name='vhost' queues='{value}'/>"));
+    Ok(updated)
+}
+
+fn replace_xml_attribute(
+    value: &str,
+    content_start: usize,
+    quote: char,
+    replacement: &str,
+) -> HypervisorResult<String> {
+    let relative_end = value[content_start..]
+        .find(quote)
+        .ok_or_else(|| HypervisorError::InvalidResponse("unterminated NIC queues attribute".into()))?;
+    let mut updated = value.to_owned();
+    updated.replace_range(content_start..content_start + relative_end, replacement);
+    Ok(updated)
+}
+
 fn parse_vnc_display(value: &str) -> HypervisorResult<VncTarget> {
     let value = value.strip_prefix("vnc://").unwrap_or(value).trim();
     let (host_text, display_text) = if let Some(rest) = value.strip_prefix('[') {
@@ -1890,19 +1982,34 @@ mod tests {
     }
 
     #[test]
-    fn derives_guest_memory_from_balloon_stats_instead_of_qemu_rss() {
+    fn derives_guest_memory_from_the_balloon_target_instead_of_usable_memory() {
         let values = parse_equals_values(
             "balloon.current=1048576\nballoon.maximum=2097152\nballoon.available=1000000\nballoon.usable=250000\nballoon.rss=1200000\n",
         );
         assert_eq!(
             parse_domain_memory(&values),
-            (Some(750_000 * 1024), Some(1_000_000 * 1024))
+            (Some(798_576 * 1024), Some(1_048_576 * 1024))
         );
 
         let fallback = parse_equals_values("balloon.current=1048576\nballoon.rss=1200000\n");
         assert_eq!(
             parse_domain_memory(&fallback),
             (Some(1_048_576 * 1024), Some(1_048_576 * 1024))
+        );
+    }
+
+    #[test]
+    fn adds_and_updates_virtio_network_multiqueue() {
+        let without = "<domain><devices><interface type='bridge'><mac address='52:54:00:00:00:01'/><model type='virtio'/></interface></devices></domain>";
+        let added = ensure_virtio_interface_queues(without, 4).unwrap();
+        assert!(added.contains("<driver name='vhost' queues='4'/>") );
+        let updated = ensure_virtio_interface_queues(&added, 8).unwrap();
+        assert!(updated.contains("queues='8'"));
+        assert!(!updated.contains("queues='4'"));
+        let unchanged_non_virtio = "<domain><devices><interface><model type='e1000e'/></interface></devices></domain>";
+        assert_eq!(
+            ensure_virtio_interface_queues(unchanged_non_virtio, 8).unwrap(),
+            unchanged_non_virtio
         );
     }
 

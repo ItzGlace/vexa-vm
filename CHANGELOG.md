@@ -3,6 +3,21 @@
 All notable changes to Vexa-VM are documented here. The project follows Semantic Versioning after
 the first stable release.
 
+## 0.1.8 - 2026-09-01
+
+### Added
+
+- Per-administrator least-privilege grants for VM creation, rebuilds, resources, traffic,
+  networking, deletion, snapshots and credentials while preserving existing API routes and the
+  legacy `vms:write` API-key scope.
+- Vhost-backed VirtIO NIC multiqueue for new VMs, plus automatic persistent-definition
+  reconciliation for existing guests with up to eight queues.
+
+### Fixed
+
+- Stop dense-node panel starvation caused by treating guest usable memory as a reduced balloon
+  target and running fleet-wide `setmem` repairs every 15 seconds.
+
 ## 1.7.0 - 2026-08-29
 
 ### Security

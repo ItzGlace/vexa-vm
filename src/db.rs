@@ -32,7 +32,7 @@ use crate::{
     },
 };
 
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
 const INITIAL_MIGRATION: &str = include_str!("../migrations/0001_init.sql");
 const API_KEY_ALLOWLIST_MIGRATION: &str = include_str!("../migrations/0002_api_key_ip_allowlist.sql");
 const TRAFFIC_ENFORCEMENT_MIGRATION: &str = include_str!("../migrations/0003_vm_traffic_enforcement.sql");
@@ -48,6 +48,8 @@ const NETWORK_SECURITY_SAFE_DEFAULTS_MIGRATION: &str =
     include_str!("../migrations/0009_network_security_safe_defaults.sql");
 const IP_OWNERSHIP_GUARD_MIGRATION: &str =
     include_str!("../migrations/0010_ip_ownership_guard.sql");
+const ADMIN_PERMISSION_OVERRIDES_MIGRATION: &str =
+    include_str!("../migrations/0011_admin_permission_overrides.sql");
 
 #[derive(Clone)]
 pub struct Database {
@@ -123,6 +125,10 @@ impl Database {
         }
         if version < 10 {
             connection.execute_batch(IP_OWNERSHIP_GUARD_MIGRATION)?;
+            version = 10;
+        }
+        if version < 11 {
+            connection.execute_batch(ADMIN_PERMISSION_OVERRIDES_MIGRATION)?;
         }
         connection.pragma_update(None, "foreign_keys", "ON")?;
 
@@ -254,6 +260,48 @@ impl Database {
             )?;
             let rows = statement.query_map([], row_to_admin)?;
             collect_rows(rows)
+        })
+    }
+
+    pub fn admin_permission_override(&self, id: &str) -> AppResult<Option<Vec<String>>> {
+        self.with_connection(|connection| {
+            connection
+                .query_row(
+                    "SELECT permissions_json FROM admin_permission_overrides WHERE admin_id = ?1",
+                    [id],
+                    |row| json_column(row, 0),
+                )
+                .optional()
+                .map_err(Into::into)
+        })
+    }
+
+    pub fn set_admin_permission_override(
+        &self,
+        id: &str,
+        permissions: Option<&[String]>,
+        updated_by: &str,
+    ) -> AppResult<()> {
+        self.with_transaction(TransactionBehavior::Immediate, |transaction| {
+            query_admin(transaction, id)?.ok_or_else(|| AppError::NotFound("admin".into()))?;
+            if let Some(permissions) = permissions {
+                let encoded = json_string(permissions)?;
+                transaction.execute(
+                    "INSERT INTO admin_permission_overrides(admin_id, permissions_json, updated_by, updated_at)
+                     VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(admin_id) DO UPDATE SET
+                       permissions_json = excluded.permissions_json,
+                       updated_by = excluded.updated_by,
+                       updated_at = excluded.updated_at",
+                    params![id, encoded, updated_by, unix_now()],
+                )?;
+            } else {
+                transaction.execute(
+                    "DELETE FROM admin_permission_overrides WHERE admin_id = ?1",
+                    [id],
+                )?;
+            }
+            Ok(())
         })
     }
 
@@ -5680,7 +5728,7 @@ mod tests {
     #[test]
     fn migration_and_vm_crud_work() {
         let database = Database::open_in_memory().unwrap();
-        assert_eq!(database.schema_version().unwrap(), 10);
+        assert_eq!(database.schema_version().unwrap(), 11);
         let vm = database.create_vm(&test_vm()).unwrap();
         assert_eq!(database.get_vm("vm-one").unwrap().unwrap().id, vm.id);
         database
@@ -6793,7 +6841,7 @@ mod tests {
     }
 
     #[test]
-    fn migrations_seven_through_ten_upgrade_an_existing_schema_sequentially() {
+    fn migrations_seven_through_eleven_upgrade_an_existing_schema_sequentially() {
         let connection = Connection::open_in_memory().unwrap();
         connection.execute_batch(INITIAL_MIGRATION).unwrap();
         connection.execute_batch(API_KEY_ALLOWLIST_MIGRATION).unwrap();
@@ -6804,7 +6852,7 @@ mod tests {
             .execute_batch(FIREWALL_RULE_OWNERSHIP_MIGRATION)
             .unwrap();
         let database = Database::from_connection(connection).unwrap();
-        assert_eq!(database.schema_version().unwrap(), 10);
+        assert_eq!(database.schema_version().unwrap(), 11);
         let columns: Vec<String> = database
             .with_connection(|connection| {
                 let mut statement = connection.prepare("PRAGMA table_info(vm_guest_tools)")?;
@@ -6820,6 +6868,22 @@ mod tests {
         assert!(!host_policy.bcp38_enabled);
         assert_eq!(host_policy.revision, 1);
         assert_eq!(host_policy.applied_revision, None);
+
+        let admin = database
+            .bootstrap_admin("owner", "$argon2id$placeholder")
+            .unwrap();
+        let permissions = vec!["vms:read".into(), "vms:reinstall".into()];
+        database
+            .set_admin_permission_override(&admin.id, Some(&permissions), &admin.id)
+            .unwrap();
+        assert_eq!(
+            database.admin_permission_override(&admin.id).unwrap(),
+            Some(permissions)
+        );
+        database
+            .set_admin_permission_override(&admin.id, None, &admin.id)
+            .unwrap();
+        assert_eq!(database.admin_permission_override(&admin.id).unwrap(), None);
 
         let vm = database.create_vm(&test_vm()).unwrap();
         let security = Security::new([0x46; 32]);

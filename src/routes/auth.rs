@@ -40,7 +40,13 @@ impl AuthContext {
     pub fn allows(&self, permission: &str) -> bool {
         self.permissions
             .iter()
-            .any(|item| item == "*" || item == permission)
+            .any(|item| {
+                item == "*"
+                    || item == permission
+                    // Preserve the established API-key contract: legacy
+                    // vms:write keys retain all VM mutation capabilities.
+                    || (item == "vms:write" && permission.starts_with("vms:"))
+            })
     }
 
     pub fn require(&self, permission: &str) -> AppResult<()> {
@@ -395,7 +401,10 @@ pub fn session_context(state: &AppState, headers: &HeaderMap) -> AppResult<Optio
     else {
         return Ok(None);
     };
-    let permissions = permissions_for_role(session.admin.role);
+    let permissions = state
+        .db
+        .admin_permission_override(&session.admin.id)?
+        .unwrap_or_else(|| permissions_for_role(session.admin.role));
     Ok(Some(AuthContext {
         actor_type: "admin",
         actor_id: session.admin.id.clone(),
@@ -408,15 +417,21 @@ pub fn session_context(state: &AppState, headers: &HeaderMap) -> AppResult<Optio
     }))
 }
 
-fn permissions_for_role(role: AdminRole) -> Vec<String> {
+pub(crate) fn permissions_for_role(role: AdminRole) -> Vec<String> {
     let permissions: &[&str] = match role {
         AdminRole::SuperAdmin => &["*"],
         AdminRole::Admin => &[
             "host:read",
             "vms:read",
-            "vms:write",
+            "vms:create",
+            "vms:edit",
             "vms:power",
             "vms:reinstall",
+            "vms:resources:write",
+            "vms:traffic:write",
+            "vms:network:write",
+            "vms:delete",
+            "vms:snapshots:write",
             "vms:password:read",
             "vms:password:write",
             "vms:vnc",
@@ -554,4 +569,35 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
 
 fn is_mutating(method: &Method) -> bool {
     !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn context(permissions: &[&str]) -> AuthContext {
+        AuthContext {
+            actor_type: "test",
+            actor_id: "test".into(),
+            admin: None,
+            permissions: permissions.iter().map(|value| (*value).into()).collect(),
+            session_hash: None,
+            source_ip: None,
+            user_agent: None,
+            request_id: None,
+        }
+    }
+
+    #[test]
+    fn fine_grained_vm_permissions_do_not_imply_resource_or_traffic_access() {
+        let rebuild_only = context(&["vms:read", "vms:reinstall", "vms:power"]);
+        assert!(rebuild_only.allows("vms:reinstall"));
+        assert!(!rebuild_only.allows("vms:create"));
+        assert!(!rebuild_only.allows("vms:resources:write"));
+        assert!(!rebuild_only.allows("vms:traffic:write"));
+
+        let legacy = context(&["vms:write"]);
+        assert!(legacy.allows("vms:create"));
+        assert!(legacy.allows("vms:traffic:write"));
+    }
 }

@@ -45,7 +45,7 @@ use crate::{
     state::{normalize_guest_locale, validate_ntp_server, validate_timezone_name, AppState},
 };
 
-use super::auth::AuthContext;
+use super::auth::{permissions_for_role, AuthContext};
 
 const DEFAULT_LIMIT: usize = 100;
 const MIB_BYTES: u64 = 1024 * 1024;
@@ -56,6 +56,15 @@ const DEFAULT_CPU_OVERCOMMIT_RATIO: f64 = 4.0;
 const DEFAULT_MEMORY_OVERCOMMIT_RATIO: f64 = 1.5;
 const MAX_CPU_OVERCOMMIT_RATIO: f64 = 16.0;
 const MAX_MEMORY_OVERCOMMIT_RATIO: f64 = 4.0;
+const ADMIN_GRANTABLE_PERMISSIONS: &[&str] = &[
+    "host:read", "vms:read", "vms:create", "vms:edit", "vms:power",
+    "vms:reinstall", "vms:resources:write", "vms:traffic:write",
+    "vms:network:write", "vms:delete", "vms:snapshots:write",
+    "vms:password:read", "vms:password:write", "vms:vnc",
+    "network:read", "network:write", "isos:read", "isos:write",
+    "settings:read", "settings:write", "admins:read", "api_keys:read",
+    "api_keys:write", "audit:read", "updates:read", "jobs:read", "jobs:write",
+];
 
 #[derive(Clone, Copy, Debug)]
 struct CapacityPolicy {
@@ -353,12 +362,21 @@ pub struct AdminCreateBody {
     pub password: String,
     #[serde(default = "default_admin_role")]
     pub role: AdminRole,
+    /// Omit to inherit the selected role. An explicit list creates a
+    /// least-privilege override for this administrator.
+    pub permissions: Option<Vec<String>>,
+    #[serde(default)]
+    pub use_role_defaults: bool,
 }
 
 #[derive(Deserialize)]
 pub struct AdminPatchBody {
     pub role: Option<AdminRole>,
     pub enabled: Option<bool>,
+    /// An array replaces the custom grant set.
+    pub permissions: Option<Vec<String>>,
+    /// Set true to remove the override and restore the role's defaults.
+    pub use_role_defaults: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -631,7 +649,7 @@ pub async fn create_vm(
     headers: HeaderMap,
     Json(mut input): Json<CreateVmBody>,
 ) -> AppResult<Response> {
-    auth.require("vms:write")?;
+    auth.require("vms:create")?;
     let idempotency_key = idempotency_key(&headers)?;
     let request_fingerprint = create_vm_request_fingerprint(&input)?;
     if let Some(response) =
@@ -867,7 +885,25 @@ pub async fn patch_vm(
     headers: HeaderMap,
     Json(input): Json<VmUpdateBody>,
 ) -> AppResult<Response> {
-    auth.require("vms:write")?;
+    let resource_change = input.vcpus.is_some()
+        || input.memory_mib.is_some()
+        || input.disk_gib.is_some()
+        || input.network_limit_mbps.is_some();
+    let traffic_change = input.traffic_limit_bytes.is_some();
+    let general_change = input.hostname.is_some()
+        || input.description.is_some()
+        || input.autostart.is_some()
+        || input.timezone.is_some()
+        || input.metadata.is_some();
+    if resource_change {
+        auth.require("vms:resources:write")?;
+    }
+    if traffic_change {
+        auth.require("vms:traffic:write")?;
+    }
+    if general_change || (!resource_change && !traffic_change) {
+        auth.require("vms:edit")?;
+    }
     let idempotency_key = idempotency_key(&headers)?;
     let current = required_vm(&state, &id)?;
     let resize = ResizeVmRequest {
@@ -970,7 +1006,7 @@ pub async fn set_vm_maintenance(
     Path(id): Path<String>,
     Json(input): Json<MaintenanceBody>,
 ) -> AppResult<Response> {
-    auth.require("vms:write")?;
+    auth.require("vms:edit")?;
     let vm = required_vm(&state, &id)?;
     let reason = input.reason.unwrap_or_default().trim().to_owned();
     if reason.len() > 500 {
@@ -1021,7 +1057,7 @@ pub async fn set_vm_disk_protection(
     Path(id): Path<String>,
     Json(input): Json<DiskProtectionBody>,
 ) -> AppResult<Response> {
-    auth.require("vms:write")?;
+    auth.require("vms:edit")?;
     let vm = required_vm(&state, &id)?;
     let mut metadata = if vm.metadata.is_object() {
         vm.metadata.clone()
@@ -1064,7 +1100,7 @@ pub async fn reset_vm_traffic(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    auth.require("vms:write")?;
+    auth.require("vms:traffic:write")?;
     let vm = required_vm(&state, &id)?;
     let previous_usage_bytes = vm.traffic_used_bytes;
     let _traffic_guard = state.traffic_lock.lock().await;
@@ -1088,7 +1124,7 @@ pub async fn delete_vm(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
-    auth.require("vms:write")?;
+    auth.require("vms:delete")?;
     let idempotency_key = idempotency_key(&headers)?;
     if let Some(existing) = idempotency_key
         .as_deref()
@@ -1457,7 +1493,7 @@ pub async fn update_vm_dns(
     Path(id): Path<String>,
     Json(input): Json<DnsBody>,
 ) -> AppResult<Response> {
-    auth.require("vms:write")?;
+    auth.require("vms:network:write")?;
     let vm = required_vm(&state, &id)?;
     let items = state
         .db
@@ -1538,7 +1574,7 @@ pub async fn update_vm_ssh_keys(
     Path(id): Path<String>,
     Json(input): Json<SshKeysBody>,
 ) -> AppResult<Response> {
-    auth.require("vms:write")?;
+    auth.require("vms:edit")?;
     let vm = required_vm(&state, &id)?;
     let keys = normalize_ssh_keys(input.ssh_keys)?;
     let mut metadata = vm.metadata.clone();
@@ -1618,7 +1654,7 @@ pub async fn create_status_token(
     Path(id): Path<String>,
     Json(input): Json<CreateTokenBody>,
 ) -> AppResult<Response> {
-    auth.require("vms:write")?;
+    auth.require("vms:edit")?;
     let vm = required_vm(&state, &id)?;
     let token = state.security.issue_customer_token();
     let scopes = if input.scopes.is_empty() {
@@ -1657,7 +1693,7 @@ pub async fn revoke_status_token(
     Extension(auth): Extension<AuthContext>,
     Path((vm_id, token_id)): Path<(String, String)>,
 ) -> AppResult<Response> {
-    auth.require("vms:write")?;
+    auth.require("vms:edit")?;
     let vm = required_vm(&state, &vm_id)?;
     state
         .db
@@ -1730,7 +1766,7 @@ pub async fn patch_vm_network_security(
     Path(id): Path<String>,
     Json(input): Json<VmNetworkSecurityPatch>,
 ) -> AppResult<Response> {
-    auth.require("vms:write")?;
+    auth.require("vms:network:write")?;
     let vm = required_vm(&state, &id)?;
     state.db.patch_vm_network_security(&vm.id, &input)?;
     let enforcement = crate::services::firewall::reconcile_vm_fail_closed(&state, &vm).await?;
@@ -1770,7 +1806,7 @@ pub async fn create_vm_firewall_rule(
     Path(id): Path<String>,
     Json(input): Json<NewVmFirewallRule>,
 ) -> AppResult<Response> {
-    auth.require("vms:write")?;
+    auth.require("vms:network:write")?;
     let vm = required_vm(&state, &id)?;
     let rule = state
         .db
@@ -1798,7 +1834,7 @@ pub async fn patch_vm_firewall_rule(
     Path((id, rule_id)): Path<(String, String)>,
     Json(input): Json<VmFirewallRulePatch>,
 ) -> AppResult<Response> {
-    auth.require("vms:write")?;
+    auth.require("vms:network:write")?;
     let vm = required_vm(&state, &id)?;
     let rule = state.db.patch_vm_firewall_rule(&vm.id, &rule_id, &input)?;
     let enforcement = crate::services::firewall::reconcile_vm_fail_closed(&state, &vm).await?;
@@ -1819,7 +1855,7 @@ pub async fn delete_vm_firewall_rule(
     Extension(auth): Extension<AuthContext>,
     Path((id, rule_id)): Path<(String, String)>,
 ) -> AppResult<Response> {
-    auth.require("vms:write")?;
+    auth.require("vms:network:write")?;
     let vm = required_vm(&state, &id)?;
     state.db.delete_vm_firewall_rule(&vm.id, &rule_id)?;
     let enforcement = crate::services::firewall::reconcile_vm_fail_closed(&state, &vm).await?;
@@ -3699,8 +3735,15 @@ pub async fn create_api_key(
         "host:read",
         "vms:read",
         "vms:write",
+        "vms:create",
+        "vms:edit",
         "vms:power",
         "vms:reinstall",
+        "vms:resources:write",
+        "vms:traffic:write",
+        "vms:network:write",
+        "vms:delete",
+        "vms:snapshots:write",
         "vms:password:read",
         "vms:password:write",
         "vms:vnc",
@@ -3853,7 +3896,13 @@ pub async fn list_admins(
     Extension(auth): Extension<AuthContext>,
 ) -> AppResult<Response> {
     auth.require("admins:read")?;
-    Ok(Json(json!({ "items": state.db.list_admins()? })).into_response())
+    let items = state
+        .db
+        .list_admins()?
+        .into_iter()
+        .map(|admin| admin_access_view(&state, admin))
+        .collect::<AppResult<Vec<_>>>()?;
+    Ok(Json(json!({ "items": items, "grantable_permissions": ADMIN_GRANTABLE_PERMISSIONS })).into_response())
 }
 
 pub async fn create_admin(
@@ -3867,10 +3916,30 @@ pub async fn create_admin(
             "administrator password must contain at least 12 characters".into(),
         ));
     }
+    if input.role == AdminRole::SuperAdmin && input.permissions.is_some() {
+        return Err(AppError::Validation(
+            "super administrators always receive full access and cannot use a permission override".into(),
+        ));
+    }
+    let permissions = if input.use_role_defaults {
+        None
+    } else {
+        input.permissions
+            .as_deref()
+            .map(validate_admin_permissions)
+            .transpose()?
+    };
     let password_hash = hash_password(&input.password)?;
     let admin = state
         .db
         .create_admin(&input.username, &password_hash, input.role)?;
+    if let Err(error) = state
+        .db
+        .set_admin_permission_override(&admin.id, permissions.as_deref(), &auth.actor_id)
+    {
+        let _ = state.db.delete_admin(&admin.id);
+        return Err(error);
+    }
     audit(
         &state,
         &auth,
@@ -3880,7 +3949,7 @@ pub async fn create_admin(
         true,
         json!({ "role": admin.role }),
     );
-    Ok((StatusCode::CREATED, Json(json!({ "admin": admin }))).into_response())
+    Ok((StatusCode::CREATED, Json(json!({ "admin": admin_access_view(&state, admin)? }))).into_response())
 }
 
 pub async fn get_admin(
@@ -3893,7 +3962,7 @@ pub async fn get_admin(
         .db
         .admin_by_id(&id)?
         .ok_or_else(|| AppError::NotFound("admin".into()))?;
-    Ok(Json(json!({ "admin": admin })).into_response())
+    Ok(Json(json!({ "admin": admin_access_view(&state, admin)? })).into_response())
 }
 
 pub async fn patch_admin(
@@ -3903,7 +3972,42 @@ pub async fn patch_admin(
     Json(input): Json<AdminPatchBody>,
 ) -> AppResult<Response> {
     auth.require("admins:write")?;
+    let current = state
+        .db
+        .admin_by_id(&id)?
+        .ok_or_else(|| AppError::NotFound("admin".into()))?;
+    let next_role = input.role.unwrap_or(current.role);
+    if next_role == AdminRole::SuperAdmin && input.permissions.is_some() {
+        return Err(AppError::Validation(
+            "super administrators always receive full access and cannot use a permission override".into(),
+        ));
+    }
+    let validated_permissions = input
+        .permissions
+        .as_deref()
+        .map(validate_admin_permissions)
+        .transpose()?;
     let admin = state.db.update_admin_access(&id, input.role, input.enabled)?;
+    if admin.role == AdminRole::SuperAdmin {
+        if input.permissions.is_some() {
+            return Err(AppError::Validation(
+                "super administrators always receive full access and cannot use a permission override".into(),
+            ));
+        }
+        state
+            .db
+            .set_admin_permission_override(&admin.id, None, &auth.actor_id)?;
+    } else if input.use_role_defaults == Some(true) {
+        state
+            .db
+            .set_admin_permission_override(&admin.id, None, &auth.actor_id)?;
+    } else if let Some(permissions) = validated_permissions.as_deref() {
+        state.db.set_admin_permission_override(
+            &admin.id,
+            Some(permissions),
+            &auth.actor_id,
+        )?;
+    }
     if input.enabled == Some(false) {
         state.db.revoke_admin_sessions(&admin.id)?;
     }
@@ -3916,7 +4020,44 @@ pub async fn patch_admin(
         true,
         json!({ "role": admin.role, "enabled": admin.enabled }),
     );
-    Ok(Json(json!({ "admin": admin })).into_response())
+    Ok(Json(json!({ "admin": admin_access_view(&state, admin)? })).into_response())
+}
+
+fn validate_admin_permissions(requested: &[String]) -> AppResult<Vec<String>> {
+    let mut permissions = requested
+        .iter()
+        .map(|permission| permission.trim())
+        .filter(|permission| !permission.is_empty())
+        .collect::<Vec<_>>();
+    permissions.sort_unstable();
+    permissions.dedup();
+    if permissions
+        .iter()
+        .any(|permission| !ADMIN_GRANTABLE_PERMISSIONS.contains(permission))
+    {
+        return Err(AppError::Validation(
+            "one or more administrator permissions are unsupported".into(),
+        ));
+    }
+    Ok(permissions.into_iter().map(str::to_owned).collect())
+}
+
+fn admin_access_view(state: &AppState, admin: crate::models::Admin) -> AppResult<Value> {
+    let override_permissions = state.db.admin_permission_override(&admin.id)?;
+    let effective_permissions = override_permissions
+        .clone()
+        .unwrap_or_else(|| permissions_for_role(admin.role));
+    Ok(json!({
+        "id": admin.id,
+        "username": admin.username,
+        "role": admin.role,
+        "enabled": admin.enabled,
+        "created_at": admin.created_at,
+        "updated_at": admin.updated_at,
+        "last_login_at": admin.last_login_at,
+        "permissions": effective_permissions,
+        "uses_role_defaults": override_permissions.is_none(),
+    }))
 }
 
 pub async fn update_admin_credentials(
@@ -4034,7 +4175,7 @@ pub async fn create_snapshot(
     headers: HeaderMap,
     Json(input): Json<SnapshotBody>,
 ) -> AppResult<Response> {
-    auth.require("vms:write")?;
+    auth.require("vms:snapshots:write")?;
     let vm = required_vm(&state, &id)?;
     let request = SnapshotRequest {
         name: input.name,
@@ -4118,7 +4259,7 @@ pub async fn revert_snapshot(
     Extension(auth): Extension<AuthContext>,
     Path((vm_id, snapshot_id)): Path<(String, String)>,
 ) -> AppResult<Response> {
-    auth.require("vms:write")?;
+    auth.require("vms:snapshots:write")?;
     let vm = required_vm(&state, &vm_id)?;
     let snapshot = state
         .db
@@ -4152,7 +4293,7 @@ pub async fn delete_snapshot(
     Extension(auth): Extension<AuthContext>,
     Path((vm_id, snapshot_id)): Path<(String, String)>,
 ) -> AppResult<Response> {
-    auth.require("vms:write")?;
+    auth.require("vms:snapshots:write")?;
     let vm = required_vm(&state, &vm_id)?;
     let snapshot = state
         .db

@@ -2044,10 +2044,39 @@
     return ({ super_admin: "Super administrator", admin: "Administrator", read_only: "Read-only auditor" })[role] || String(role || "Unknown").replaceAll("_", " ");
   }
 
+  const adminPermissionLabels = {
+    "host:read": "View node health", "vms:read": "View virtual machines",
+    "vms:create": "Create virtual machines", "vms:edit": "Edit VM identity and policy",
+    "vms:power": "Power and suspend VMs", "vms:reinstall": "Rebuild / reinstall VMs",
+    "vms:resources:write": "Change CPU, RAM, disk or speed", "vms:traffic:write": "Change or reset traffic quota",
+    "vms:network:write": "Change VM networking and firewall", "vms:delete": "Delete virtual machines",
+    "vms:snapshots:write": "Manage VM snapshots", "vms:password:read": "Reveal stored VM passwords",
+    "vms:password:write": "Change VM passwords", "vms:vnc": "Open VNC consoles",
+    "network:read": "View node networks", "network:write": "Manage node networks and IPs",
+    "isos:read": "View images and ISOs", "isos:write": "Manage images and ISOs",
+    "settings:read": "View settings", "settings:write": "Change settings",
+    "admins:read": "View administrators", "api_keys:read": "View API keys",
+    "api_keys:write": "Manage API keys", "audit:read": "View audit logs",
+    "updates:read": "View available updates", "jobs:read": "View operations",
+    "jobs:write": "Cancel operations",
+  };
+
+  function adminPermissionInputs(available, selected, disabled = false) {
+    const granted = new Set(asArray(selected));
+    return asArray(available).map((permission) => `<label class="flex items-start gap-2 rounded-lg border border-white/[.06] p-2 text-xs text-slate-300"><input type="checkbox" data-admin-permission value="${escapeHtml(permission)}" ${granted.has(permission) ? "checked" : ""} ${disabled ? "disabled" : ""}><span>${escapeHtml(adminPermissionLabels[permission] || permission)}</span></label>`).join("");
+  }
+
   async function loadAdmins() {
     const loading = $("#admins-loading"); loading?.classList.remove("hidden");
     try {
-      const admins = listPayload(await api("/api/v1/admins")).items;
+      const response = await api("/api/v1/admins");
+      const admins = listPayload(response).items;
+      const grantable = asArray(response?.grantable_permissions || Object.keys(adminPermissionLabels));
+      state.adminGrantablePermissions = grantable;
+      const createPermissions = $("[data-admin-create-permissions]");
+      if (createPermissions && !createPermissions.children.length) {
+        createPermissions.innerHTML = adminPermissionInputs(grantable, grantable, true);
+      }
       const target = $("#admins-list");
       const permissions = asArray(state.auth?.permissions);
       const writable = permissions.includes("*") || permissions.includes("admins:write");
@@ -2056,7 +2085,8 @@
       if (target) target.innerHTML = admins.map((admin) => {
         const isCurrent = admin.id === currentId;
         const roleOptions = ["super_admin", "admin", "read_only"].map((role) => `<option value="${role}" ${admin.role === role ? "selected" : ""}>${escapeHtml(adminRoleLabel(role))}</option>`).join("");
-        return `<div class="py-5" data-admin-row="${escapeHtml(admin.id)}"><div class="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between"><div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><p class="font-normal text-slate-100">${escapeHtml(admin.username)}</p>${isCurrent ? '<span class="badge border-orbit-300/20 text-orbit-200">Current account</span>' : ""}${admin.enabled ? '<span class="badge border-emerald-300/20 text-emerald-200">Enabled</span>' : '<span class="badge border-rose-300/20 text-rose-200">Disabled</span>'}</div><p class="mt-1 text-xs text-slate-600">Created ${dateTime(admin.created_at)}${admin.last_login_at ? ` · Last login ${dateTime(admin.last_login_at)}` : " · Never signed in"}</p></div><div class="flex flex-col gap-3 sm:flex-row sm:items-end"><label><span class="label">Access level</span><select class="field min-w-52" data-admin-role ${writable ? "" : "disabled"}>${roleOptions}</select></label><label class="flex h-[2.75rem] items-center gap-2 rounded-xl border border-white/[.08] px-3 text-sm text-slate-300"><input type="checkbox" data-admin-enabled ${admin.enabled ? "checked" : ""} ${writable ? "" : "disabled"}>Enabled</label><div class="flex flex-wrap gap-2"><button type="button" class="btn-secondary px-3 py-2" data-save-admin ${writable ? "" : "disabled"}>Save</button>${isCurrent ? "" : `<button type="button" class="btn-secondary px-3 py-2" data-reset-admin-password data-admin-name="${escapeHtml(admin.username)}" ${writable ? "" : "disabled"}>Password</button><button type="button" class="btn-danger px-3 py-2" data-delete-admin data-admin-name="${escapeHtml(admin.username)}" ${writable ? "" : "disabled"}>Delete</button>`}</div></div></div></div>`;
+        const customDisabled = !writable || admin.role === "super_admin" || admin.uses_role_defaults;
+        return `<div class="py-5" data-admin-row="${escapeHtml(admin.id)}"><div class="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between"><div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><p class="font-normal text-slate-100">${escapeHtml(admin.username)}</p>${isCurrent ? '<span class="badge border-orbit-300/20 text-orbit-200">Current account</span>' : ""}${admin.enabled ? '<span class="badge border-emerald-300/20 text-emerald-200">Enabled</span>' : '<span class="badge border-rose-300/20 text-rose-200">Disabled</span>'}</div><p class="mt-1 text-xs text-slate-600">Created ${dateTime(admin.created_at)}${admin.last_login_at ? ` · Last login ${dateTime(admin.last_login_at)}` : " · Never signed in"}</p></div><div class="flex flex-col gap-3 sm:flex-row sm:items-end"><label><span class="label">Access level</span><select class="field min-w-52" data-admin-role ${writable ? "" : "disabled"}>${roleOptions}</select></label><label class="flex h-[2.75rem] items-center gap-2 rounded-xl border border-white/[.08] px-3 text-sm text-slate-300"><input type="checkbox" data-admin-enabled ${admin.enabled ? "checked" : ""} ${writable ? "" : "disabled"}>Enabled</label><div class="flex flex-wrap gap-2"><button type="button" class="btn-secondary px-3 py-2" data-save-admin ${writable ? "" : "disabled"}>Save</button>${isCurrent ? "" : `<button type="button" class="btn-secondary px-3 py-2" data-reset-admin-password data-admin-name="${escapeHtml(admin.username)}" ${writable ? "" : "disabled"}>Password</button><button type="button" class="btn-danger px-3 py-2" data-delete-admin data-admin-name="${escapeHtml(admin.username)}" ${writable ? "" : "disabled"}>Delete</button>`}</div></div></div><details class="mt-4 rounded-xl border border-white/[.07] p-3"><summary class="cursor-pointer text-sm text-slate-300">Fine-grained privileges</summary><label class="mt-3 flex items-center gap-2 text-xs text-slate-400"><input type="checkbox" data-admin-role-defaults ${admin.uses_role_defaults ? "checked" : ""} ${!writable || admin.role === "super_admin" ? "disabled" : ""}>Use role defaults</label><div data-admin-permissions class="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3 ${customDisabled ? "opacity-40" : ""}">${adminPermissionInputs(grantable, admin.permissions, customDisabled)}</div></details></div>`;
       }).join("");
     } catch (error) { toast(error.message, "error", error.requestId); }
     finally { loading?.classList.add("hidden"); }
@@ -2159,7 +2189,7 @@
     $$('[data-open-admin-dialog]').forEach((button) => button.addEventListener("click", () => $("#admin-dialog")?.showModal()));
     $$('[data-close-admin-dialog]').forEach((button) => button.addEventListener("click", () => $("#admin-dialog")?.close()));
     $$('[data-close-admin-password-dialog]').forEach((button) => button.addEventListener("click", () => $("#admin-password-dialog")?.close()));
-    $("#admin-form")?.addEventListener("submit", async (event) => { event.preventDefault(); const form = event.currentTarget; if (!form.reportValidity()) return; const values = formObject(form); const errorBox = $("#admin-error"); errorBox?.classList.add("hidden"); if (values.password !== values.confirm_password) { if (errorBox) { errorBox.textContent = "Passwords do not match"; errorBox.classList.remove("hidden"); } return; } const submit = $("button[type='submit']", form); submit.disabled = true; try { await api("/api/v1/admins", { method: "POST", body: { username: values.username, password: values.password, role: values.role } }); form.reset(); $("#admin-dialog")?.close(); toast("Administrator created", "success"); await loadAdmins(); } catch (error) { if (errorBox) { errorBox.textContent = `${error.message}${error.requestId ? ` · ${error.requestId}` : ""}`; errorBox.classList.remove("hidden"); } } finally { submit.disabled = false; } });
+    $("#admin-form")?.addEventListener("submit", async (event) => { event.preventDefault(); const form = event.currentTarget; if (!form.reportValidity()) return; const values = formObject(form); const errorBox = $("#admin-error"); errorBox?.classList.add("hidden"); if (values.password !== values.confirm_password) { if (errorBox) { errorBox.textContent = "Passwords do not match"; errorBox.classList.remove("hidden"); } return; } const useRoleDefaults = Boolean(form.elements.use_role_defaults?.checked); const permissions = $$('[data-admin-create-permissions] [data-admin-permission]:checked', form).map((input) => input.value); const submit = $("button[type='submit']", form); submit.disabled = true; try { await api("/api/v1/admins", { method: "POST", body: { username: values.username, password: values.password, role: values.role, use_role_defaults: useRoleDefaults, permissions: useRoleDefaults ? null : permissions } }); form.reset(); $("#admin-dialog")?.close(); toast("Administrator created", "success"); await loadAdmins(); } catch (error) { if (errorBox) { errorBox.textContent = `${error.message}${error.requestId ? ` · ${error.requestId}` : ""}`; errorBox.classList.remove("hidden"); } } finally { submit.disabled = false; } });
     $("#admin-password-form")?.addEventListener("submit", async (event) => { event.preventDefault(); const form = event.currentTarget; if (!form.reportValidity()) return; const values = formObject(form); const errorBox = $("#admin-password-error"); errorBox?.classList.add("hidden"); if (values.password !== values.confirm_password) { if (errorBox) { errorBox.textContent = "Passwords do not match"; errorBox.classList.remove("hidden"); } return; } const submit = $("button[type='submit']", form); submit.disabled = true; try { await api(`/api/v1/admins/${encodeURIComponent(values.admin_id)}/credentials`, { method: "PUT", body: { username: null, password: values.password } }); form.reset(); $("#admin-password-dialog")?.close(); toast("Password changed and existing sessions revoked", "success"); await loadAdmins(); } catch (error) { if (errorBox) { errorBox.textContent = `${error.message}${error.requestId ? ` · ${error.requestId}` : ""}`; errorBox.classList.remove("hidden"); } } finally { submit.disabled = false; } });
     $$('[data-open-api-key-dialog]').forEach((button) => button.addEventListener("click", () => $("#api-key-dialog")?.showModal())); $$('[data-close-api-key-dialog]').forEach((button) => button.addEventListener("click", () => $("#api-key-dialog")?.close()));
     $("#api-key-form")?.addEventListener("submit", async (event) => { event.preventDefault(); const form = event.currentTarget; if (!form.reportValidity()) return; const values = formObject(form); const errorBox = $("#api-key-error"); errorBox?.classList.add("hidden"); try { const response = await api("/api/v1/api-keys", { method: "POST", body: { name: values.name, permissions: asArray(values.scopes), expires_at: unixSeconds(values.expires_at), ip_allowlist: splitLines(values.ip_allowlist) } }); const secret = response?.data?.token || response?.data?.key || response?.data?.secret || response?.key || response?.token || response?.secret; if (!secret) throw new ApiError("The API key was created but its one-time secret was not returned."); $("#api-key-dialog")?.close(); form.reset(); setText("#api-key-secret", secret); $("#api-key-secret-dialog")?.showModal(); await loadApiKeys(); } catch (error) { if (errorBox) { errorBox.textContent = `${error.message}${error.requestId ? ` · ${error.requestId}` : ""}`; errorBox.classList.remove("hidden"); } } });
@@ -2178,9 +2208,28 @@
       if (apiKeyButton) { const approved = await confirmAction({ title: "Revoke API key?", message: "Automation using this key will immediately lose access.", confirmLabel: "Revoke key" }); if (!approved) return; try { await api(`/api/v1/api-keys/${encodeURIComponent(apiKeyButton.dataset.revokeApiKey)}`, { method: "DELETE" }); toast("API key revoked", "success"); await loadApiKeys(); } catch (error) { toast(error.message, "error", error.requestId); } return; }
       const row = event.target.closest("[data-admin-row]"); if (!row) return;
       const id = row.dataset.adminRow;
-      if (event.target.closest("[data-save-admin]")) { const button = event.target.closest("[data-save-admin]"); button.disabled = true; try { await api(`/api/v1/admins/${encodeURIComponent(id)}`, { method: "PATCH", body: { role: $("[data-admin-role]", row)?.value, enabled: Boolean($("[data-admin-enabled]", row)?.checked) } }); toast("Administrator access updated", "success"); await loadAdmins(); } catch (error) { toast(error.message, "error", error.requestId); button.disabled = false; } return; }
+      if (event.target.closest("[data-save-admin]")) { const button = event.target.closest("[data-save-admin]"); const role = $("[data-admin-role]", row)?.value; const useRoleDefaults = role === "super_admin" || Boolean($("[data-admin-role-defaults]", row)?.checked); const permissions = $$('[data-admin-permission]:checked', row).map((input) => input.value); button.disabled = true; try { await api(`/api/v1/admins/${encodeURIComponent(id)}`, { method: "PATCH", body: { role, enabled: Boolean($("[data-admin-enabled]", row)?.checked), use_role_defaults: useRoleDefaults, permissions: useRoleDefaults ? null : permissions } }); toast("Administrator access updated", "success"); await loadAdmins(); } catch (error) { toast(error.message, "error", error.requestId); button.disabled = false; } return; }
       const passwordButton = event.target.closest("[data-reset-admin-password]"); if (passwordButton) { const form = $("#admin-password-form"); form?.reset(); if (form) form.elements.admin_id.value = id; setText("#admin-password-target", `Set a new password for ${passwordButton.dataset.adminName}. Every active session for this account will be revoked.`); $("#admin-password-error")?.classList.add("hidden"); $("#admin-password-dialog")?.showModal(); return; }
       const deleteButton = event.target.closest("[data-delete-admin]"); if (deleteButton) { const approved = await confirmAction({ title: `Delete ${deleteButton.dataset.adminName}?`, message: "The account and all of its panel sessions will be permanently removed. Audit records are retained.", confirmLabel: "Delete administrator" }); if (!approved) return; deleteButton.disabled = true; try { await api(`/api/v1/admins/${encodeURIComponent(id)}`, { method: "DELETE" }); toast("Administrator deleted", "success"); await loadAdmins(); } catch (error) { toast(error.message, "error", error.requestId); deleteButton.disabled = false; } }
+    });
+    document.addEventListener("change", (event) => {
+      const createForm = event.target.closest("#admin-form");
+      if (createForm && (event.target.matches("[name='use_role_defaults']") || event.target.matches("[name='role']"))) {
+        const superAdmin = createForm.elements.role?.value === "super_admin";
+        if (superAdmin) createForm.elements.use_role_defaults.checked = true;
+        const disabled = superAdmin || Boolean(createForm.elements.use_role_defaults?.checked);
+        $$('[data-admin-create-permissions] [data-admin-permission]', createForm).forEach((input) => { input.disabled = disabled; });
+        $("[data-admin-create-permissions]", createForm)?.classList.toggle("opacity-40", disabled);
+        return;
+      }
+      const row = event.target.closest("[data-admin-row]");
+      if (!row || !(event.target.matches("[data-admin-role-defaults]") || event.target.matches("[data-admin-role]"))) return;
+      const superAdmin = $("[data-admin-role]", row)?.value === "super_admin";
+      const defaults = $("[data-admin-role-defaults]", row);
+      if (defaults && superAdmin) defaults.checked = true;
+      const disabled = superAdmin || Boolean(defaults?.checked);
+      $$('[data-admin-permission]', row).forEach((input) => { input.disabled = disabled; });
+      $("[data-admin-permissions]", row)?.classList.toggle("opacity-40", disabled);
     });
     window.addEventListener("beforeunload", (event) => { if ($$('[data-settings-form]').some((form) => form.dataset.dirty === "true")) { event.preventDefault(); event.returnValue = ""; } });
     await loadSettings();

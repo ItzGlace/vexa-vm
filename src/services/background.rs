@@ -43,6 +43,7 @@ pub fn spawn(state: Arc<AppState>) {
     tokio::spawn(inventory_loop(state.clone()));
     tokio::spawn(metrics_loop(state.clone()));
     tokio::spawn(memory_entitlement_loop(state.clone()));
+    tokio::spawn(network_multiqueue_loop(state.clone()));
     tokio::spawn(traffic_quota_loop(state.clone()));
     tokio::spawn(network_security_loop(state.clone()));
     tokio::spawn(guest_tools_health_loop(state.clone()));
@@ -61,7 +62,9 @@ async fn memory_entitlement_loop(state: Arc<AppState>) {
         if let Err(error) = restore_memory_entitlements(&state).await {
             warn!(error = %error, "memory entitlement reconciliation failed");
         }
-        tokio::time::sleep(Duration::from_secs(15)).await;
+        // This is drift repair, not a scheduler. A frequent fleet-wide
+        // domstats/setmem sweep can starve API requests on dense nodes.
+        tokio::time::sleep(Duration::from_secs(60 * 60)).await;
     }
 }
 
@@ -102,6 +105,30 @@ async fn restore_memory_entitlements(state: &AppState) -> AppResult<()> {
 
 fn memory_entitlement_needs_restore(current_mib: u64, entitlement_mib: u64) -> bool {
     current_mib.saturating_add(64) < entitlement_mib
+}
+
+async fn network_multiqueue_loop(state: Arc<AppState>) {
+    tokio::time::sleep(Duration::from_secs(30)).await;
+    loop {
+        match state.db.list_vms() {
+            Ok(vms) => {
+                for vm in vms {
+                    let queues = vm.vcpus.clamp(1, 8);
+                    match state
+                        .hypervisor
+                        .ensure_network_multiqueue(&vm.name, queues)
+                        .await
+                    {
+                        Ok(true) => info!(vm = %vm.name, queues, "enabled persistent VirtIO NIC multiqueue"),
+                        Ok(false) => {}
+                        Err(error) => warn!(vm = %vm.name, error = %error, "could not reconcile NIC multiqueue"),
+                    }
+                }
+            }
+            Err(error) => warn!(error = %error, "could not list VMs for NIC multiqueue reconciliation"),
+        }
+        tokio::time::sleep(Duration::from_secs(6 * 60 * 60)).await;
+    }
 }
 
 async fn routed_network_loop(state: Arc<AppState>) {
