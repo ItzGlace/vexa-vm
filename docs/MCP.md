@@ -23,6 +23,12 @@ Authenticated setup/download endpoints require `settings:read`: `GET /api/v1/mcp
 `GET /api/v1/mcp/client`, and `GET /api/v1/mcp/documentation`. They return no credentials and use
 no-store caching. Key creation still uses the existing API-key permission and confirmation form.
 
+If setup remains at “Loading setup details…” on 0.2.1, hard-refresh the browser and update to 0.2.2.
+That release loads MCP independently of other Settings probes, gives setup reads a ten-second timeout,
+and offers **Retry setup**. **Open API keys** provides a direct fallback. A permission error means the
+account needs `api_keys:write`; retrying does not grant permissions. The key form rechecks current
+grants before opening. Script/style URLs include the release version to avoid stale assets after updates.
+
 ## Authentication and first connection
 
 1. In **Settings → API keys**, create a dedicated, expiring support key. Start with `host:read`,

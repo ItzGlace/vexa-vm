@@ -3,6 +3,16 @@
 All notable changes to Vexa-VM are documented here. The project follows Semantic Versioning after
 the first stable release.
 
+## 0.2.2 - 2026-11-20
+
+### Fixed
+
+- Initialize MCP setup independently of general Settings and the host network-security request.
+- Bound setup/settings/authentication reads, show retryable errors, and recheck API-key permissions
+  before opening the MCP key form. Permission failures keep key creation disabled.
+- Version browser scripts and styles with the running release so upgrades load matching assets.
+- Add a retry control and direct API-key link instead of leaving MCP setup at a permanent spinner.
+
 ## 0.2.1 - 2026-11-20
 
 ### Fixed

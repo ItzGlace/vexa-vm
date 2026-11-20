@@ -9,7 +9,7 @@
   <meta name="csrf-token" content="">
   <title>{% block title %}Control panel{% endblock title %} · Vexa VM</title>
   <link rel="icon" type="image/png" href="/static/images/vexa-vm-emblem.png">
-  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/app.css?v={{ asset_version }}">
   {% block head %}{% endblock head %}
 </head>
 <body class="min-h-full font-light" data-page="{% block page_id %}admin{% endblock page_id %}">
@@ -117,10 +117,10 @@
     <div class="p-3"><label for="command-input" class="sr-only">Search pages and virtual machines</label><input id="command-input" class="field text-base" placeholder="Search pages and virtual machines…" autocomplete="off"><div id="command-results" class="mt-2 max-h-80 overflow-y-auto"></div><p class="px-3 py-2 text-xs text-slate-600">Press Escape to close · Enter to open</p></div>
   </dialog>
 
-  <script src="/static/js/ssh-keys.js" defer></script>
-  <script src="/static/js/recovery.js" defer></script>
-  <script src="/static/js/mcp-setup.js" defer></script>
-  <script src="/static/js/app.js" defer></script>
+  <script src="/static/js/ssh-keys.js?v={{ asset_version }}" defer></script>
+  <script src="/static/js/recovery.js?v={{ asset_version }}" defer></script>
+  <script src="/static/js/mcp-setup.js?v={{ asset_version }}" defer></script>
+  <script src="/static/js/app.js?v={{ asset_version }}" defer></script>
   {% block scripts %}{% endblock scripts %}
 </body>
 </html>

@@ -6,14 +6,15 @@
     "watch:css": "tailwindcss -i ./assets/css/input.css -o ./static/css/app.css --watch",
     "vendor:novnc": "node ./scripts/vendor-novnc.mjs",
     "build": "npm run build:css && npm run vendor:novnc",
-    "test": "npm run test:uuid && npm run test:operations && npm run test:status-links && npm run test:vm-create-username && npm run test:ssh-keys && npm run test:console && npm run test:mcp-setup",
+    "test": "npm run test:uuid && npm run test:operations && npm run test:status-links && npm run test:vm-create-username && npm run test:ssh-keys && npm run test:console && npm run test:mcp-setup && npm run test:request-timeout",
     "test:uuid": "node ./tests/uuid_compat.js",
     "test:operations": "node ./tests/operation_compat.js",
     "test:status-links": "node ./tests/status_link_ui.js",
     "test:vm-create-username": "node ./tests/vm_create_username.js",
     "test:ssh-keys": "node ./tests/ssh_key_generator.js",
     "test:console": "node ./tests/console_controls.js",
-    "test:mcp-setup": "node ./tests/mcp_setup.js"
+    "test:mcp-setup": "node ./tests/mcp_setup.js",
+    "test:request-timeout": "node ./tests/request_timeout.js"
   },
   "devDependencies": {
     "@novnc/novnc": "1.5.0",

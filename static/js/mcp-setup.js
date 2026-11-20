@@ -21,7 +21,8 @@
   root.VexaMcpSetup = { origin, configuration, async init({ api, copyText, prepareKey }) {
     const panel = document.querySelector('[data-settings-panel="mcp"]'); if (!panel) return;
     const field = (id) => document.getElementById(id);
-    let content = "";
+    if (!field("mcp-retry")) { field("mcp-setup-status").textContent = "The page and setup script are different versions. Hard-refresh the page to load matching files."; return; }
+    let content = ""; let loading = false; let canCreateKey = false;
     const update = () => {
       try {
         content = configuration({ apiOrigin: field("mcp-origin").value, scriptPath: field("mcp-script-path").value, format: field("mcp-client-format").value, writes: field("mcp-writes").checked });
@@ -37,19 +38,44 @@
       const url = URL.createObjectURL(new Blob([content], { type: "text/plain" }));
       const link = document.createElement("a"); link.href = url; link.download = field("mcp-client-format").value === "codex" ? "vexa-mcp.toml" : "vexa-mcp.json"; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     };
-    field("mcp-create-key").onclick = prepareKey;
-    try {
-      const setup = await api("/api/v1/mcp/setup");
-      field("mcp-origin").value = setup.api_origin || location.origin;
-      field("mcp-bridge-version").textContent = `Bridge version ${setup.version} · stdio`;
-      field("mcp-create-key").disabled = !setup.can_create_key;
-      field("mcp-setup-status").textContent = "Download the bridge below, save it on your trusted computer, and configure your AI client.";
-    } catch (error) {
-      field("mcp-setup-status").textContent = error.message;
-      field("mcp-origin").value = location.origin;
+    field("mcp-create-key").onclick = async () => {
+      if (!canCreateKey || loading) return;
       field("mcp-create-key").disabled = true;
-    }
-    update();
+      try { await prepareKey(); }
+      catch (error) {
+        field("mcp-setup-status").textContent = error.message;
+        if (error.status === 401 || error.status === 403) canCreateKey = false;
+        field("mcp-retry").classList.remove("hidden");
+      } finally { field("mcp-create-key").disabled = !canCreateKey; }
+    };
+    const load = async () => {
+      if (loading) return;
+      loading = true; canCreateKey = false;
+      field("mcp-create-key").disabled = true;
+      field("mcp-retry").disabled = true;
+      field("mcp-retry").classList.add("hidden");
+      field("mcp-setup-status").textContent = "Loading setup details…";
+      try {
+        const setup = await api("/api/v1/mcp/setup");
+        if (!setup || setup.transport !== "stdio" || typeof setup.can_create_key !== "boolean") throw new Error("The server returned invalid MCP setup details. Check that the running application and browser files are the same version.");
+        field("mcp-origin").value = setup.api_origin || location.origin;
+        field("mcp-bridge-version").textContent = `Bridge version ${setup.version} · stdio`;
+        canCreateKey = setup.can_create_key;
+        field("mcp-create-key").disabled = !canCreateKey;
+        field("mcp-setup-status").textContent = canCreateKey
+          ? "Download the bridge below, save it on your trusted computer, and configure your AI client."
+          : "Setup loaded. Your account needs API-key management permission to create a new key; an administrator can grant access or create the key for you.";
+      } catch (error) {
+        field("mcp-setup-status").textContent = `${error.message} Use Retry setup, or open API keys directly.`;
+        field("mcp-origin").value = location.origin;
+        field("mcp-retry").classList.remove("hidden");
+      } finally {
+        loading = false; field("mcp-retry").disabled = false;
+        update();
+      }
+    };
+    field("mcp-retry").onclick = load;
+    await load();
   } };
   if (typeof module !== "undefined") module.exports = { origin, configuration };
 })(typeof globalThis !== "undefined" ? globalThis : window);

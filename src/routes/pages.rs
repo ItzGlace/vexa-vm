@@ -53,7 +53,8 @@ pub async fn docs(State(state): State<Arc<AppState>>) -> AppResult<Response> {
     render(&state, "docs.html", Context::new(), false)
 }
 
-pub fn render(state: &AppState, template: &str, context: Context, no_store: bool) -> AppResult<Response> {
+pub fn render(state: &AppState, template: &str, mut context: Context, no_store: bool) -> AppResult<Response> {
+    context.insert("asset_version", env!("CARGO_PKG_VERSION"));
     let html = state.templates.render(template, &context)?;
     let mut response = Html(html).into_response();
     if no_store {

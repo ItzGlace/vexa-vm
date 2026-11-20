@@ -18,7 +18,7 @@ import urllib.request
 import zlib
 from pathlib import Path
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 MAX_BYTES = 16 * 1024 * 1024
 MAX_LINE = 128 * 1024
 

@@ -45,6 +45,28 @@
   }
 
   async function api(path, options = {}) {
+    const { timeoutMs, ...requestOptions } = options;
+    if (!timeoutMs) return apiRequest(path, requestOptions);
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    requestOptions.signal?.addEventListener("abort", cancel, { once: true });
+    if (requestOptions.signal?.aborted) cancel();
+    let timer;
+    try {
+      return await Promise.race([
+        apiRequest(path, { ...requestOptions, signal: controller.signal }),
+        new Promise((_, reject) => { timer = setTimeout(() => {
+          reject(new ApiError("The request timed out. Check the connection and retry.", 408, "request_timeout"));
+          controller.abort();
+        }, timeoutMs); }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+      requestOptions.signal?.removeEventListener("abort", cancel);
+    }
+  }
+
+  async function apiRequest(path, options = {}) {
     const method = (options.method || "GET").toUpperCase();
     const headers = new Headers(options.headers || {});
     headers.set("Accept", "application/json");
@@ -1982,7 +2004,7 @@
 
   async function loadSettings() {
     try {
-      const [payload, authPayload] = await Promise.all([api("/api/v1/settings"), api("/api/v1/auth/me")]);
+      const [payload, authPayload] = await Promise.all([api("/api/v1/settings", { timeoutMs: 10000 }), api("/api/v1/auth/me", { timeoutMs: 10000 })]);
       const settings = payload?.data || payload?.settings || payload || {};
       state.auth = authPayload?.data || authPayload || {};
       const permissions = asArray(state.auth.permissions);
@@ -2021,7 +2043,7 @@
       $("#save-host-network-security")?.toggleAttribute("disabled", !canManageHostNetworkSecurity);
       $("#host-network-security-panel")?.classList.toggle("opacity-60", !canManageHostNetworkSecurity);
       try {
-        const networkSecurity = await api("/api/v1/network/security");
+        const networkSecurity = await api("/api/v1/network/security", { timeoutMs: 10000 });
         const profile = networkSecurity?.data?.profile || networkSecurity?.profile || {};
         const ownershipToggle = $("#ip-ownership-guard-enabled"); if (ownershipToggle) { ownershipToggle.checked = profile.ip_ownership_guard_enabled !== false; ownershipToggle.dataset.original = String(ownershipToggle.checked); }
         const toggle = $("#bcp38-enabled"); if (toggle) { toggle.checked = profile.bcp38_enabled === true; toggle.dataset.original = String(toggle.checked); }
@@ -2235,23 +2257,42 @@
       $("[data-admin-permissions]", row)?.classList.toggle("opacity-40", disabled);
     });
     window.addEventListener("beforeunload", (event) => { if ($$('[data-settings-form]').some((form) => form.dataset.dirty === "true")) { event.preventDefault(); event.returnValue = ""; } });
-    await loadSettings();
     const selectSettingsHash = () => {
       const name = location.hash.slice(1);
       showSettingsTab(["general", "virtualization", "storage", "network", "console", "security", "updates", "api", "mcp"].includes(name) ? name : "general");
     };
     window.addEventListener("hashchange", selectSettingsHash);
     selectSettingsHash();
-    await window.VexaMcpSetup?.init({ api, copyText, prepareKey: () => {
+    const mcpOptions = { api: (path) => api(path, { timeoutMs: 10000 }), copyText, prepareKey: async () => {
+      // Recheck grants here: general Settings may still be loading or unavailable.
+      const payload = await api("/api/v1/auth/me", { timeoutMs: 10000 });
+      const permissions = asArray((payload?.data || payload)?.permissions);
+      const allows = (permission) => permissions.includes("*") || permissions.includes(permission);
+      if (!allows("api_keys:write")) throw new ApiError("Your account needs API-key management permission to create a key.", 403);
       const form = $("#api-key-form"); form.reset();
       form.elements.name.value = "MCP diagnostics";
       const defaults = ["host:read", "vms:read", "jobs:read", "audit:read", "vms:console:read"];
-      $$('input[name="scopes"]', form).forEach((input) => { input.checked = !input.disabled && defaults.includes(input.value); });
+      $$('input[name="scopes"]', form).forEach((input) => {
+        input.disabled = !allows(input.value);
+        input.closest("label")?.classList.toggle("opacity-40", input.disabled);
+        input.checked = !input.disabled && defaults.includes(input.value);
+      });
       const expiry = new Date(Date.now() + 7 * 86400_000);
       form.elements.expires_at.value = new Date(expiry.getTime() - expiry.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
       $("#api-key-error")?.classList.add("hidden");
       $("#api-key-dialog")?.showModal();
-    } });
+    } };
+    const mcpFailure = (error) => {
+      setText("#mcp-setup-status", error?.message || "The MCP setup script could not load. Hard-refresh this page or open API keys directly.");
+      $("#mcp-create-key")?.setAttribute("disabled", "");
+      const retry = $("#mcp-retry");
+      if (retry) { retry.classList.remove("hidden"); retry.textContent = "Reload setup page"; retry.onclick = () => location.reload(); }
+    };
+    const mcpReady = window.VexaMcpSetup?.init
+      ? window.VexaMcpSetup.init(mcpOptions).catch(mcpFailure)
+      : Promise.resolve(mcpFailure());
+    // MCP must not wait for general Settings or the host's network-security probe.
+    await Promise.allSettled([mcpReady, loadSettings()]);
   }
 
   function initDocs() {

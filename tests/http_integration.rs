@@ -437,6 +437,12 @@ async fn complete_http_management_and_customer_lifecycle() {
         response.assert_status(StatusCode::OK);
         assert_eq!(response.headers["cache-control"], "no-store");
     }
+    let settings_html = fixture.admin_get(&admin, "/settings").await.text();
+    assert!(settings_html.contains(&format!("/static/js/app.js?v={}", env!("CARGO_PKG_VERSION"))));
+    assert!(settings_html.contains(&format!("/static/js/mcp-setup.js?v={}", env!("CARGO_PKG_VERSION"))));
+    assert!(settings_html.contains("id=\"mcp-retry\""));
+    let login_html = fixture.get("/login").await.text();
+    assert!(login_html.contains(&format!("/static/css/app.css?v={}", env!("CARGO_PKG_VERSION"))));
     let setup = fixture.admin_get(&admin, "/api/v1/mcp/setup").await.json();
     assert_eq!(setup["transport"], "stdio");
     assert_eq!(setup["api_origin"], "http://127.0.0.1:18080");
