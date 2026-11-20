@@ -3,6 +3,17 @@
 All notable changes to Vexa-VM are documented here. The project follows Semantic Versioning after
 the first stable release.
 
+## 0.2.1 - 2026-11-20
+
+### Fixed
+
+- Add the missing Settings → MCP & AI clients setup page and command-palette search entries.
+- Provide authenticated bridge/guide downloads, read-only key preparation, and client configuration
+  generation with HTTPS validation and explicit write opt-in.
+- Add console screenshot, console input, and offline recovery scopes to the API-key creation form.
+- Follow Settings hash navigation from search results without leaving a modal open or hiding all tabs.
+- Keep the Settings tab bar and setup content within narrow mobile viewports.
+
 ## 0.2.0 - 2026-11-20
 
 ### Added

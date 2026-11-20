@@ -529,6 +529,7 @@
     const commandInput = $("#command-input");
     const commands = [
       ["Overall", "/overall", "Host health and capacity"], ["Virtual machines", "/vms", "Guest inventory"], ["Create VM", "/vms/create", "Provision a new guest"], ["Activity logs", "/logs", "Audit and abuse records"],
+      ["MCP & AI clients", "/settings#mcp", "Codex Claude Gemini Antigravity setup and authentication"],
       ["Network", "/network", "IP pools and defaults"], ["Images & ISOs", "/isos", "Installation library"], ["Settings", "/settings", "Node configuration"], ["API documentation", "/docs", "REST API reference"],
     ];
     const renderCommands = () => {
@@ -538,11 +539,12 @@
       if (target) target.innerHTML = results.map(([name, href, description], index) => `<a href="${href}" class="flex items-center justify-between rounded-xl px-3 py-2.5 ${index === 0 ? "bg-white/[.05]" : ""}"><span><span class="block text-sm font-normal text-slate-200">${name}</span><span class="block text-xs text-slate-500">${description}</span></span><span class="text-xs text-slate-600">↵</span></a>`).join("") || '<p class="px-3 py-5 text-center text-sm text-slate-500">No matching pages</p>';
     };
     $("[data-command-trigger]")?.addEventListener("click", () => { renderCommands(); commandDialog?.showModal(); requestAnimationFrame(() => commandInput?.focus()); });
+    $("#command-results")?.addEventListener("click", (event) => { if (event.target.closest("a")) commandDialog?.close(); });
     commandInput?.addEventListener("input", renderCommands);
     commandInput?.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         const first = $("a", $("#command-results"));
-        if (first) location.assign(first.href);
+        if (first) { commandDialog?.close(); location.assign(first.href); }
       }
     });
     document.addEventListener("keydown", (event) => {
@@ -2234,7 +2236,22 @@
     });
     window.addEventListener("beforeunload", (event) => { if ($$('[data-settings-form]').some((form) => form.dataset.dirty === "true")) { event.preventDefault(); event.returnValue = ""; } });
     await loadSettings();
-    const initial = location.hash.slice(1); showSettingsTab(["general", "virtualization", "storage", "network", "console", "security", "updates", "api"].includes(initial) ? initial : "general");
+    const selectSettingsHash = () => {
+      const name = location.hash.slice(1);
+      showSettingsTab(["general", "virtualization", "storage", "network", "console", "security", "updates", "api", "mcp"].includes(name) ? name : "general");
+    };
+    window.addEventListener("hashchange", selectSettingsHash);
+    selectSettingsHash();
+    await window.VexaMcpSetup?.init({ api, copyText, prepareKey: () => {
+      const form = $("#api-key-form"); form.reset();
+      form.elements.name.value = "MCP diagnostics";
+      const defaults = ["host:read", "vms:read", "jobs:read", "audit:read", "vms:console:read"];
+      $$('input[name="scopes"]', form).forEach((input) => { input.checked = !input.disabled && defaults.includes(input.value); });
+      const expiry = new Date(Date.now() + 7 * 86400_000);
+      form.elements.expires_at.value = new Date(expiry.getTime() - expiry.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+      $("#api-key-error")?.classList.add("hidden");
+      $("#api-key-dialog")?.showModal();
+    } });
   }
 
   function initDocs() {

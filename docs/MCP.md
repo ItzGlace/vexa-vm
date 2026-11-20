@@ -5,6 +5,24 @@ administrator's trusted workstation or an isolated support runner. It connects t
 HTTPS API; it does not open another public port or expose an unauthenticated remote MCP listener.
 The script is included under `docs/mcp` in release archives and Debian installations.
 
+## Setup from the panel
+
+Starting with 0.2.1, open **Settings → MCP & AI clients** (`/settings#mcp`), or search for MCP,
+Codex, Claude, Gemini, or Antigravity in the command palette. The page provides the bridge download,
+full guide, a dedicated read-only API-key preset with a seven-day expiry, and JSON/Codex TOML
+configuration generation. Enter the path where you saved the bridge on your own computer. The
+configuration contains no API key; inject `VEXA_MCP_API_KEY` using your client's secure environment
+settings. Changes remain disabled unless explicitly selected and authorized by the API-key scopes.
+
+The setup page is not a remote MCP endpoint. The bridge runs on the computer running your AI client
+and connects to the node API. If the configured public URL uses non-loopback HTTP, configure HTTPS
+before connecting a remote client. The page cannot observe whether a separate client has connected;
+verify authentication with a host/VM read from that client.
+
+Authenticated setup/download endpoints require `settings:read`: `GET /api/v1/mcp/setup`,
+`GET /api/v1/mcp/client`, and `GET /api/v1/mcp/documentation`. They return no credentials and use
+no-store caching. Key creation still uses the existing API-key permission and confirmation form.
+
 ## Authentication and first connection
 
 1. In **Settings → API keys**, create a dedicated, expiring support key. Start with `host:read`,

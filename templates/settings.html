@@ -11,8 +11,8 @@
   </div>
   <div id="settings-alert" class="mt-5 hidden rounded-xl border border-amber-300/20 bg-amber-300/10 p-4 text-sm text-amber-100" role="status"></div>
 
-  <div class="mt-7 grid gap-6 lg:grid-cols-[13rem_minmax(0,1fr)]">
-    <nav class="panel h-fit p-2 lg:sticky lg:top-24" aria-label="Settings sections">
+  <div class="mt-7 grid grid-cols-1 gap-6 lg:grid-cols-[13rem_minmax(0,1fr)]">
+    <nav class="panel min-w-0 h-fit p-2 lg:sticky lg:top-24" aria-label="Settings sections">
       <div class="flex gap-1 overflow-x-auto lg:block lg:space-y-1">
         <button class="min-w-max w-full rounded-xl bg-nebula-500/15 px-3 py-2.5 text-left text-sm font-normal text-white ring-1 ring-nebula-400/20" data-settings-tab="general">General</button>
         <button class="min-w-max w-full rounded-xl px-3 py-2.5 text-left text-sm text-slate-500 hover:bg-white/5 hover:text-white" data-settings-tab="virtualization">Virtualization</button>
@@ -21,6 +21,7 @@
         <button class="min-w-max w-full rounded-xl px-3 py-2.5 text-left text-sm text-slate-500 hover:bg-white/5 hover:text-white" data-settings-tab="console">Console</button>
         <button class="min-w-max w-full rounded-xl px-3 py-2.5 text-left text-sm text-slate-500 hover:bg-white/5 hover:text-white" data-settings-tab="security">Security &amp; account</button>
         <button class="min-w-max w-full rounded-xl px-3 py-2.5 text-left text-sm text-slate-500 hover:bg-white/5 hover:text-white" data-settings-tab="updates">Updates</button>
+        <button class="min-w-max w-full rounded-xl px-3 py-2.5 text-left text-sm text-slate-500 hover:bg-white/5 hover:text-white" data-settings-tab="mcp">MCP &amp; AI clients</button>
         <button class="min-w-max w-full rounded-xl px-3 py-2.5 text-left text-sm text-slate-500 hover:bg-white/5 hover:text-white" data-settings-tab="api">API keys</button>
       </div>
     </nav>
@@ -182,6 +183,45 @@
         </div>
       </article>
 
+      <article class="panel hidden p-5 sm:p-7" data-settings-panel="mcp" aria-labelledby="mcp-title">
+        <div class="border-b border-white/[.07] pb-5">
+          <p id="mcp-bridge-version" class="text-xs text-orbit-300">Admin automation</p>
+          <h2 id="mcp-title" class="mt-1 text-xl font-extralight text-white">MCP &amp; AI clients</h2>
+          <p class="mt-2 text-sm leading-6 text-slate-400">Connect Codex, Claude, Gemini, Antigravity, or another stdio MCP client to this node. The bridge runs on your trusted computer and authenticates to the Vexa API.</p>
+          <p id="mcp-setup-status" class="mt-3 text-sm text-slate-300" role="status">Loading setup details…</p>
+        </div>
+        <ol class="mt-6 space-y-6">
+          <li>
+            <h3 class="text-base font-normal text-white">1. Save the bridge on your computer</h3>
+            <p class="mt-2 text-sm leading-6 text-slate-400">Use Python 3.10 or newer. Download the file on the computer running your AI client, then enter its full local path below.</p>
+            <div class="mt-3 flex flex-wrap gap-3"><a href="/api/v1/mcp/client" class="btn-primary" download="vexa_mcp.py">Download MCP bridge</a><a href="/api/v1/mcp/documentation" class="btn-secondary" target="_blank" rel="noopener noreferrer">Full setup guide</a></div>
+          </li>
+          <li>
+            <h3 class="text-base font-normal text-white">2. Create a dedicated API key</h3>
+            <p class="mt-2 text-sm leading-6 text-slate-400">Start with host, VM, jobs, audit, and console screenshot read permissions. Review the scopes, expiry, and source-IP allowlist before creating the key. Revoke it in API keys when support ends.</p>
+            <button id="mcp-create-key" type="button" class="btn-secondary mt-3" disabled>Prepare read-only MCP key</button>
+            <p class="mt-3 text-sm leading-6 text-slate-400">Provide the one-time key as <code>VEXA_MCP_API_KEY</code> through your AI client's secure environment settings. Downloaded configurations contain no key; clients vary in whether they inherit environment variables.</p>
+          </li>
+          <li>
+            <h3 class="text-base font-normal text-white">3. Configure your AI client</h3>
+            <div class="mt-4 grid gap-4 sm:grid-cols-2">
+              <label><span class="label">Node API origin</span><input id="mcp-origin" type="url" class="field font-mono" placeholder="https://vm.example.com" autocomplete="off"></label>
+              <label><span class="label">Bridge path on your computer</span><input id="mcp-script-path" class="field font-mono" placeholder="/absolute/path/to/vexa_mcp.py" autocomplete="off"></label>
+              <label><span class="label">Client configuration</span><select id="mcp-client-format" class="field"><option value="json">Claude / Gemini / compatible clients · JSON</option><option value="codex">Codex · TOML</option></select></label>
+              <label class="flex items-start gap-3 rounded-xl border border-white/[.07] p-4"><input id="mcp-writes" type="checkbox" class="mt-1"><span><span class="block text-sm text-white">Allow authorized changes</span><span class="mt-1 block text-xs leading-5 text-slate-400">Off by default. Changes also require matching API-key scopes and human approval in your AI client. SSH access needs separate configuration in the guide.</span></span></label>
+            </div>
+            <p id="mcp-config-error" class="mt-3 text-sm text-amber-200" role="status"></p>
+            <pre id="mcp-config" class="mt-4 max-h-96 overflow-auto rounded-xl border border-white/[.07] bg-slate-950/60 p-4 font-mono text-xs leading-6 text-orbit-200" tabindex="0" aria-label="MCP client configuration"></pre>
+            <div class="mt-3 flex flex-wrap gap-3"><button id="mcp-copy" type="button" class="btn-secondary" disabled>Copy configuration</button><button id="mcp-download-config" type="button" class="btn-secondary" disabled>Download configuration</button></div>
+          </li>
+          <li>
+            <h3 class="text-base font-normal text-white">4. Connect and verify from your AI client</h3>
+            <p class="mt-2 text-sm leading-6 text-slate-400">Restart the client, list the Vexa MCP tools, then ask it to read host status and list VMs. Successful authentication and tool results confirm the connection. This page does not report a client connected until you verify it there.</p>
+            <p class="mt-3 text-sm leading-6 text-slate-400">Screenshots use <code>vms:console:read</code>. Keyboard input needs <code>vms:console:write</code>, and offline recovery needs <code>vms:recovery</code>. Enable these individually in API keys. Serial/BIOS access depends on the guest configuration; see the setup guide.</p>
+          </li>
+        </ol>
+      </article>
+
       <div class="hidden" data-settings-panel="api">
         <article class="panel p-5 sm:p-7">
           <div class="flex flex-col gap-4 border-b border-white/[.07] pb-5 sm:flex-row sm:items-center sm:justify-between"><div><h2 class="text-xl font-extralight text-white">API keys</h2><p class="mt-1 text-sm text-slate-400">Scoped, expiring credentials with optional IPv4/IPv6 CIDR allowlists. Secrets are shown once.</p></div><button type="button" class="btn-primary" data-open-api-key-dialog>Create API key</button></div>
@@ -235,6 +275,9 @@
         <label class="flex items-center gap-2 rounded-xl border border-white/[.07] p-3 text-sm"><input type="checkbox" name="scopes" value="vms:power">VM power</label>
         <label class="flex items-center gap-2 rounded-xl border border-white/[.07] p-3 text-sm"><input type="checkbox" name="scopes" value="vms:reinstall">VM reinstall</label>
         <label class="flex items-center gap-2 rounded-xl border border-white/[.07] p-3 text-sm"><input type="checkbox" name="scopes" value="vms:vnc">VM console links</label>
+        <label class="flex items-center gap-2 rounded-xl border border-white/[.07] p-3 text-sm"><input type="checkbox" name="scopes" value="vms:console:read">Console screenshots</label>
+        <label class="flex items-center gap-2 rounded-xl border border-white/[.07] p-3 text-sm"><input type="checkbox" name="scopes" value="vms:console:write">Console keyboard input</label>
+        <label class="flex items-center gap-2 rounded-xl border border-white/[.07] p-3 text-sm"><input type="checkbox" name="scopes" value="vms:recovery">Offline disk account recovery</label>
         <label class="flex items-center gap-2 rounded-xl border border-white/[.07] p-3 text-sm"><input type="checkbox" name="scopes" value="vms:password:read">Password reveal</label>
         <label class="flex items-center gap-2 rounded-xl border border-white/[.07] p-3 text-sm"><input type="checkbox" name="scopes" value="vms:password:write">Password records</label>
         <label class="flex items-center gap-2 rounded-xl border border-white/[.07] p-3 text-sm"><input type="checkbox" name="scopes" value="network:read">Network read</label>

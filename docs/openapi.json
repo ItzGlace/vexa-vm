@@ -33,6 +33,80 @@
     { "adminSession": [] }
   ],
   "paths": {
+    "/api/v1/mcp/setup": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "operationId": "getMcpSetup",
+        "summary": "Get MCP stdio onboarding metadata (settings:read)",
+        "responses": {
+          "200": {
+            "description": "Version, safe API origin, download URLs and key-creation eligibility; no-store"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "settings:read required"
+          }
+        }
+      }
+    },
+    "/api/v1/mcp/client": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "operationId": "downloadMcpBridge",
+        "summary": "Download the local Python MCP bridge (settings:read)",
+        "responses": {
+          "200": {
+            "description": "vexa_mcp.py attachment; no-store",
+            "content": {
+              "text/x-python": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "settings:read required"
+          }
+        }
+      }
+    },
+    "/api/v1/mcp/documentation": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "operationId": "getMcpGuide",
+        "summary": "Read the MCP setup guide (settings:read)",
+        "responses": {
+          "200": {
+            "description": "Plain text guide; no-store",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "settings:read required"
+          }
+        }
+      }
+    },
     "/api/v1/vms/{id}/recovery": {
       "post": {
         "tags": [

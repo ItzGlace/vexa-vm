@@ -1,0 +1,18 @@
+const assert = require('node:assert/strict');
+const { origin, configuration } = require('../static/js/mcp-setup.js');
+for (const value of ['http://vm.example.com','https://user:pass@vm.example.com','https://vm.example.com/path','https://vm.example.com/?secret=x','https://vm.example.com/#mcp']) assert.throws(() => origin(value));
+assert.equal(origin('http://127.0.0.1:8080'),'http://127.0.0.1:8080');
+assert.equal(origin('http://[::1]:8080'),'http://[::1]:8080');
+const options = { apiOrigin:'https://vm.example.com', scriptPath:'C:\\Users\\Admin Name\\vexa_mcp.py', format:'json', writes:false };
+const plain = JSON.parse(configuration(options)).mcpServers['vexa-admin'];
+assert.deepEqual(plain.args,[options.scriptPath]);
+assert.equal(plain.env.VEXA_MCP_URL,options.apiOrigin);
+assert.equal(plain.env.VEXA_MCP_ALLOW_WRITES,undefined);
+assert.equal(plain.env.VEXA_MCP_API_KEY,undefined);
+assert.equal(JSON.parse(configuration({...options,writes:true})).mcpServers['vexa-admin'].env.VEXA_MCP_ALLOW_WRITES,'1');
+const toml = configuration({...options,format:'codex'});
+assert.match(toml,/env_vars = \["VEXA_MCP_API_KEY"\]/);
+assert.match(toml,/tool_timeout_sec = 660/);
+assert.throws(() => configuration({...options,scriptPath:''}));
+assert.throws(() => configuration({...options,scriptPath:'x\ncommand = "evil"'}));
+console.log('MCP config requires HTTPS, preserves local paths, excludes credentials, and enables writes only by opt-in');

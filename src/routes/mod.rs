@@ -1,6 +1,7 @@
 pub mod api;
 pub mod auth;
 pub mod pages;
+pub mod mcp;
 pub mod public;
 pub mod support;
 
@@ -43,6 +44,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         ));
 
     let protected_api = Router::new()
+        .route("/mcp/setup", get(mcp::setup))
+        .route("/mcp/client", get(mcp::client))
+        .route("/mcp/documentation", get(mcp::documentation))
         .route("/vms/:id/recovery", post(support::recover_password))
         .route("/vms/:id/console/screenshot", get(support::screenshot))
         .route("/vms/:id/console/keys", post(support::keys))

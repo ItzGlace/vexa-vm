@@ -430,6 +430,21 @@ async fn complete_http_management_and_customer_lifecycle() {
             .await
             .assert_status(StatusCode::OK);
     }
+    // MCP onboarding is an authenticated download/configuration surface, not a public listener.
+    for path in ["/api/v1/mcp/setup", "/api/v1/mcp/client", "/api/v1/mcp/documentation"] {
+        fixture.get(path).await.assert_status(StatusCode::UNAUTHORIZED);
+        let response = fixture.admin_get(&admin, path).await;
+        response.assert_status(StatusCode::OK);
+        assert_eq!(response.headers["cache-control"], "no-store");
+    }
+    let setup = fixture.admin_get(&admin, "/api/v1/mcp/setup").await.json();
+    assert_eq!(setup["transport"], "stdio");
+    assert_eq!(setup["api_origin"], "http://127.0.0.1:18080");
+    assert_eq!(setup["can_create_key"], true);
+    assert!(setup.get("api_key").is_none());
+    let bridge = fixture.admin_get(&admin, "/api/v1/mcp/client").await;
+    assert!(bridge.headers["content-disposition"].to_str().unwrap().contains("vexa_mcp.py"));
+    assert!(bridge.text().contains("def main():"));
     let no_csrf = fixture
         .raw(
             Method::PATCH,
@@ -487,6 +502,12 @@ async fn complete_http_management_and_customer_lifecycle() {
     let api_key_json = api_key_response.json();
     let api_key = api_key_json["key"].as_str().unwrap().to_owned();
     let api_key_id = api_key_json["record"]["id"].as_str().unwrap().to_owned();
+    let narrow_key = fixture.admin_json(&admin, Method::POST, "/api/v1/api-keys", json!({"name":"no-settings-access","permissions":["host:read"],"ip_allowlist":[]})).await;
+    narrow_key.assert_status(StatusCode::CREATED);
+    let narrow_key = narrow_key.json()["key"].as_str().unwrap().to_owned();
+    for path in ["/api/v1/mcp/setup", "/api/v1/mcp/client", "/api/v1/mcp/documentation"] {
+        fixture.bearer_get(&narrow_key, path).await.assert_status(StatusCode::FORBIDDEN);
+    }
     let host = fixture.bearer_get(&api_key, "/api/v1/host").await;
     host.assert_status(StatusCode::OK);
     assert_eq!(host.json()["host"]["hypervisor"]["backend"], "mock");
