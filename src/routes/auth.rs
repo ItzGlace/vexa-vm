@@ -44,8 +44,10 @@ impl AuthContext {
                 item == "*"
                     || item == permission
                     // Preserve the established API-key contract: legacy
-                    // vms:write keys retain all VM mutation capabilities.
-                    || (item == "vms:write" && permission.starts_with("vms:"))
+                    // vms:write retains established VM grants; new offline/console
+                    // support privileges always require an explicit grant.
+                    || (item == "vms:write" && permission.starts_with("vms:")
+                        && !matches!(permission, "vms:recovery" | "vms:console:read" | "vms:console:write"))
             })
     }
 
@@ -435,6 +437,9 @@ pub(crate) fn permissions_for_role(role: AdminRole) -> Vec<String> {
             "vms:password:read",
             "vms:password:write",
             "vms:vnc",
+            "vms:recovery",
+            "vms:console:read",
+            "vms:console:write",
             "network:read",
             "network:write",
             "isos:read",

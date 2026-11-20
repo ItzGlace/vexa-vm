@@ -2,6 +2,7 @@ pub mod api;
 pub mod auth;
 pub mod pages;
 pub mod public;
+pub mod support;
 
 use std::{sync::Arc, time::Duration};
 
@@ -42,6 +43,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         ));
 
     let protected_api = Router::new()
+        .route("/vms/:id/recovery", post(support::recover_password))
+        .route("/vms/:id/console/screenshot", get(support::screenshot))
+        .route("/vms/:id/console/keys", post(support::keys))
         .route("/auth/logout", post(auth::logout))
         .route("/auth/me", get(api::auth_me))
         .route("/host", get(api::host))
@@ -211,6 +215,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/vm/password",
             get(public::public_reveal_password).put(public::public_update_password),
         )
+        .route("/vm/recovery", post(public::public_recover_password))
         .route("/vm/ssh-keys", put(public::public_update_ssh_keys))
         .route(
             "/vm/firewall",
@@ -298,7 +303,9 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 async fn request_timeout(request: axum::extract::Request, next: Next) -> Response {
     let path = request.uri().path();
-    let timeout = if path == "/api/v1/isos/upload"
+    let timeout = if path.ends_with("/recovery") {
+        Duration::from_secs(600)
+    } else if path == "/api/v1/isos/upload"
         || path == "/api/v1/updates/stage"
         || (path.starts_with("/api/v1/isos/") && path.ends_with("/verify"))
     {

@@ -3,6 +3,23 @@
 All notable changes to Vexa-VM are documented here. The project follows Semantic Versioning after
 the first stable release.
 
+## 0.2.0 - 2026-11-20
+
+### Added
+
+- Offline stopped-guest account recovery: Linux libguestfs password setting, explicit direct
+  shadow hash fallback, and Windows local SAM password clearing with chntpw. Recovery requires
+  a disk backup acknowledgment and typed VM name. It does not require a guest agent, bypass
+  disk encryption, or reset domain accounts. Real-disk validation remains an operator prerequisite.
+- Separate recovery, console screenshot, and console input API permissions; opt-in customer
+  recovery scopes, rate limits, and durable support action auditing.
+- Local stdio admin MCP service with scoped bearer authentication, TLS and redirect protections,
+  opt-in writes, console screenshots/BIOS keys, and optional pinned-host SSH/serial access.
+- Device-local Ed25519 SSH key generation with one-time private-key download and public-key copy.
+- VNC clipboard controls, explicit text-to-keystroke fallback, Android/mobile keyboard input,
+  touch pan, special keys, and dynamic viewport sizing.
+- Operator, recovery, MCP client configuration, and console compatibility documentation.
+
 ## 0.1.9 - 2026-09-02
 
 ### Fixed

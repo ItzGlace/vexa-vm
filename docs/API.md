@@ -818,3 +818,7 @@ The service also exposes versioned `/api/v1/network/pools`,
 the same authenticated handlers and do not emit `Deprecation` or `Sunset`
 headers. New integrations should use `/api/v1/vms`, `/api/v1/ip-ranges`,
 `/api/v1/ip-addresses`, and `/api/v1/jobs`.
+
+## Support operations (0.2.0)
+
+See [Offline recovery](RECOVERY.md) for `POST /api/v1/vms/{id}/recovery` and the explicit customer `recovery:write` scope. `GET /api/v1/vms/{id}/console/screenshot` requires `vms:console:read` and returns PNG or binary PPM with no-store caching. `POST /api/v1/vms/{id}/console/keys` requires `vms:console:write`, accepts `{ "keys": ["KEY_F2"], "confirmation": "exact-vm-name" }`, and sends a simultaneous key chord. These scopes are not implied by legacy `vms:write`. All support actions are rate-limited and audited. [MCP.md](MCP.md) documents the authenticated stdio bridge, key allowlist, direct SSH, serial access, and client setup.

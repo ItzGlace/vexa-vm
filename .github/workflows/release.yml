@@ -52,6 +52,7 @@ jobs:
           npm ci
           npm run build
           npm test
+          python3 -m unittest discover -s tests -p test_mcp.py -v
 
       - uses: dtolnay/rust-toolchain@1.75.0
         with:

@@ -315,6 +315,17 @@ pub struct VncTarget {
     pub port: u16,
 }
 
+/// Recovery is deliberately explicit: no automatic fallback after a partial disk edit.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryRequest {
+    pub method: String,
+    pub username: String,
+    pub password: Option<String>,
+    pub confirmation: String,
+    pub backup_confirmed: bool,
+}
+
 #[async_trait]
 pub trait Hypervisor: Send + Sync {
     async fn capabilities(&self) -> HypervisorResult<HypervisorCapabilities>;
@@ -371,6 +382,16 @@ pub trait Hypervisor: Send + Sync {
     async fn revert_snapshot(&self, name: &str, snapshot: &str) -> HypervisorResult<VmInfo>;
     async fn delete_snapshot(&self, name: &str, snapshot: &str) -> HypervisorResult<()>;
     async fn vnc_target(&self, name: &str) -> HypervisorResult<VncTarget>;
+    async fn recover_password(&self, _name: &str, _request: &RecoveryRequest) -> HypervisorResult<()> {
+        Err(HypervisorError::BackendUnavailable("offline recovery requires local libvirt and libguestfs".into()))
+    }
+    async fn console_screenshot(&self, _name: &str) -> HypervisorResult<Vec<u8>> {
+        Err(HypervisorError::BackendUnavailable("screenshots require local libvirt".into()))
+    }
+    async fn console_keys(&self, _name: &str, _keys: &[String]) -> HypervisorResult<()> {
+        Err(HypervisorError::BackendUnavailable("console input requires local libvirt".into()))
+    }
+
 }
 
 fn default_true() -> bool {

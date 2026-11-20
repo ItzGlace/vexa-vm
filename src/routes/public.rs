@@ -1565,3 +1565,22 @@ mod tests {
         ));
     }
 }
+
+/// Customer recovery is opt-in, VM-bound, CSRF-protected, and not granted by password:write.
+pub async fn public_recover_password(
+    State(state): State<Arc<AppState>>, headers: HeaderMap,
+    connect: Option<ConnectInfo<SocketAddr>>,
+    Json(input): Json<crate::hypervisor::RecoveryRequest>,
+) -> AppResult<Response> {
+    require_public_csrf(&headers)?;
+    let token = customer_session(&state, &headers, connect.as_ref())?;
+    require_scope(&token, "recovery:write")?;
+    let vm = required_vm(&state, &token.vm_id)?;
+    require_customer_mutation_available(&vm)?;
+    let auth = super::auth::AuthContext {
+        actor_type: "customer_token", actor_id: token.id.clone(), admin: None,
+        permissions: vec![], session_hash: None,
+        source_ip: client_ip(&headers, connect.as_ref()), user_agent: None, request_id: None,
+    };
+    super::support::recover(state, auth, vm, input).await
+}

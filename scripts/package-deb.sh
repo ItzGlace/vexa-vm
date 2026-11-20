@@ -53,6 +53,7 @@ Architecture: amd64
 Maintainer: Vexa-VM contributors <noreply@users.noreply.github.com>
 Homepage: https://github.com/ItzGlace/vexa-vm
 Installed-Size: ${installed_size}
+Suggests: libguestfs-tools, chntpw, python3, openssh-client
 Depends: adduser, ca-certificates, curl, openssl, sqlite3, qemu-kvm, qemu-utils, libvirt-daemon-system, libvirt-clients, virtinst, cloud-image-utils, genisoimage, p7zip-full, dnsmasq-base, iproute2, nftables, systemd
 Description: open-source KVM virtualization panel and API
  Vexa-VM is a Rust control plane for a single KVM/libvirt node with a web

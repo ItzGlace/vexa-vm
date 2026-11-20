@@ -5,6 +5,9 @@
 //! VM/interface names are validated, image sources are canonicalized beneath
 //! configured roots, and writable disks are derived from the storage root.
 
+mod support;
+pub(crate) use support::validate_recovery;
+
 use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr},
@@ -1575,6 +1578,16 @@ impl Hypervisor for LibvirtHypervisor {
         self.virsh("delete-snapshot", &["snapshot-delete", name, snapshot])
             .await?;
         Ok(())
+    }
+
+    async fn recover_password(&self, name: &str, request: &super::RecoveryRequest) -> HypervisorResult<()> {
+        self.recover_password_impl(name, request).await
+    }
+    async fn console_screenshot(&self, name: &str) -> HypervisorResult<Vec<u8>> {
+        self.console_screenshot_impl(name).await
+    }
+    async fn console_keys(&self, name: &str, keys: &[String]) -> HypervisorResult<()> {
+        self.console_keys_impl(name, keys).await
     }
 
     async fn vnc_target(&self, name: &str) -> HypervisorResult<VncTarget> {

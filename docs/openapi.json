@@ -33,6 +33,297 @@
     { "adminSession": [] }
   ],
   "paths": {
+    "/api/v1/vms/{id}/recovery": {
+      "post": {
+        "tags": [
+          "Virtual machines"
+        ],
+        "operationId": "recoverVmAccount",
+        "summary": "Offline local-account disk recovery; explicit vms:recovery scope",
+        "description": "Stopped VM and tested backup required. Linux password setting or direct shadow hash fallback; Windows local SAM password clearing. No disk encryption or domain recovery. No automatic fallback or retry. See docs/RECOVERY.md.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "method",
+                  "username",
+                  "confirmation",
+                  "backup_confirmed"
+                ],
+                "properties": {
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "linux-libguestfs",
+                      "linux-shadow",
+                      "windows-sam"
+                    ]
+                  },
+                  "username": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "password": {
+                    "type": "string",
+                    "writeOnly": true,
+                    "minLength": 12,
+                    "maxLength": 256,
+                    "description": "Required for Linux; omit for Windows local password clearing"
+                  },
+                  "confirmation": {
+                    "type": "string",
+                    "description": "Exact VM name"
+                  },
+                  "backup_confirmed": {
+                    "type": "boolean",
+                    "const": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Operation completed; recovery still requires boot/login verification"
+          },
+          "400": {
+            "description": "Invalid input or missing backup/name acknowledgment"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Explicit support permission or CSRF required"
+          },
+          "409": {
+            "description": "Guest state or disk layout prevents recovery"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "503": {
+            "description": "Backend or host recovery utility unavailable"
+          }
+        }
+      }
+    },
+    "/api/public/vm/recovery": {
+      "post": {
+        "tags": [
+          "Customer"
+        ],
+        "operationId": "customerRecoverVmAccount",
+        "summary": "VM-bound offline account recovery; explicit recovery:write scope",
+        "description": "Requires status-session cookie and CSRF. Default customer links do not grant recovery.",
+        "security": [
+          {
+            "customerSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "method",
+                  "username",
+                  "confirmation",
+                  "backup_confirmed"
+                ],
+                "properties": {
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "linux-libguestfs",
+                      "linux-shadow",
+                      "windows-sam"
+                    ]
+                  },
+                  "username": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "password": {
+                    "type": "string",
+                    "writeOnly": true,
+                    "minLength": 12,
+                    "maxLength": 256,
+                    "description": "Required for Linux; omit for Windows local password clearing"
+                  },
+                  "confirmation": {
+                    "type": "string",
+                    "description": "Exact VM name"
+                  },
+                  "backup_confirmed": {
+                    "type": "boolean",
+                    "const": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Operation completed; recovery still requires boot/login verification"
+          },
+          "400": {
+            "description": "Invalid input or missing backup/name acknowledgment"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Explicit support permission or CSRF required"
+          },
+          "409": {
+            "description": "Guest state or disk layout prevents recovery"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "503": {
+            "description": "Backend or host recovery utility unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/vms/{id}/console/screenshot": {
+      "get": {
+        "tags": [
+          "Virtual machines"
+        ],
+        "operationId": "getVmConsoleScreenshot",
+        "summary": "Read graphical console with vms:console:read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Private console image; Cache-Control: no-store",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/x-portable-pixmap": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Explicit console read scope required"
+          },
+          "503": {
+            "description": "Screenshot unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/vms/{id}/console/keys": {
+      "post": {
+        "tags": [
+          "Virtual machines"
+        ],
+        "operationId": "sendVmConsoleKeys",
+        "summary": "Send console key chord with vms:console:write",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "keys",
+                  "confirmation"
+                ],
+                "properties": {
+                  "keys": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 16,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^KEY_[A-Z0-9]+$"
+                    }
+                  },
+                  "confirmation": {
+                    "type": "string",
+                    "description": "Exact VM name"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Operation completed; recovery still requires boot/login verification"
+          },
+          "400": {
+            "description": "Invalid input or missing backup/name acknowledgment"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Explicit support permission or CSRF required"
+          },
+          "409": {
+            "description": "Guest state or disk layout prevents recovery"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "503": {
+            "description": "Backend or host recovery utility unavailable"
+          }
+        }
+      }
+    },
     "/api/v1/health": {
       "get": {
         "tags": ["Health"],

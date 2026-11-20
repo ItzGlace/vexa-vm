@@ -1,6 +1,6 @@
 [package]
 name = "vexa-vm"
-version = "0.1.9"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.75"
 description = "Open-source KVM node management panel and API"
@@ -51,7 +51,6 @@ url = "2.5.0"
 uuid = { version = "1.8.0", features = ["serde", "v4"] }
 vexa-guest-protocol = { path = "guest-tools/crates/protocol" }
 
-[dev-dependencies]
 tempfile = "3.10.1"
 
 [profile.release]

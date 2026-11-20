@@ -840,6 +840,29 @@ async fn complete_http_management_and_customer_lifecycle() {
     let created_json = created.json();
     let vm_id = created_json["vm"]["id"].as_str().unwrap().to_owned();
     fixture.wait_for_job(&api_key, &operation_id(&created_json)).await;
+    // Recovery and direct console access never inherit the legacy vms:write grant.
+    let support_key = fixture.admin_json(&admin, Method::POST, "/api/v1/api-keys",
+        json!({"name":"legacy-writer", "permissions":["vms:write"], "ip_allowlist":[]})).await;
+    support_key.assert_status(StatusCode::CREATED);
+    let support_key = support_key.json()["key"].as_str().unwrap().to_owned();
+    let recovery_path = format!("/api/v1/vms/{vm_id}/recovery");
+    let recovery_body = json!({"method":"linux-shadow","username":"root","password":"RecoverySecret!123", "confirmation":"http-suite-vm", "backup_confirmed":true});
+    fixture.get(&format!("/api/v1/vms/{vm_id}/console/screenshot")).await.assert_status(StatusCode::UNAUTHORIZED);
+    fixture.bearer_get(&support_key, &format!("/api/v1/vms/{vm_id}/console/screenshot")).await.assert_status(StatusCode::FORBIDDEN);
+    fixture.bearer_json(&support_key, Method::POST, &recovery_path, recovery_body.clone()).await.assert_status(StatusCode::FORBIDDEN);
+    fixture.bearer_json(&support_key, Method::POST, &format!("/api/v1/vms/{vm_id}/console/keys"), json!({"keys":["KEY_F2"],"confirmation":"http-suite-vm"})).await.assert_status(StatusCode::FORBIDDEN);
+    let before_recovery = fixture.state.db.vm_password_envelope(&vm_id).unwrap();
+    let vm_name = created_json["vm"]["name"].as_str().unwrap();
+    let mut checked_body = recovery_body;
+    checked_body["confirmation"] = json!(vm_name);
+    checked_body["backup_confirmed"] = json!(false);
+    fixture.bearer_json(&api_key, Method::POST, &recovery_path, checked_body.clone()).await.assert_status(StatusCode::BAD_REQUEST);
+    checked_body["backup_confirmed"] = json!(true);
+    fixture.bearer_json(&api_key, Method::POST, &recovery_path, checked_body).await.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(fixture.state.db.vm_password_envelope(&vm_id).unwrap(), before_recovery, "mock recovery must not claim a disk change or overwrite credentials");
+    let no_csrf = fixture.raw(Method::POST, &recovery_path, serde_json::to_vec(&json!({"method":"windows-sam","username":"Administrator","confirmation":vm_name,"backup_confirmed":true})).unwrap(), Some("application/json"), &[(COOKIE.as_str(), &admin.cookie)]).await;
+    no_csrf.assert_status(StatusCode::FORBIDDEN);
+
     let replay = fixture
         .bearer_json_with_headers(
             &api_key,
@@ -1174,6 +1197,9 @@ async fn complete_http_management_and_customer_lifecycle() {
     let public_vm = fixture.public_get(&status_cookie, "/api/public/vm").await;
     public_vm.assert_status(StatusCode::OK);
     assert_eq!(public_vm.json()["vm"]["id"], vm_id);
+    // A default customer link does not grant offline disk writes.
+    fixture.public_json(&status_cookie, &status_csrf, Method::POST, "/api/public/vm/recovery", json!({"method":"windows-sam","username":"Administrator","confirmation":vm_name,"backup_confirmed":true})).await.assert_status(StatusCode::FORBIDDEN);
+
     let public_metrics = fixture.public_get(&status_cookie, "/api/public/vm/metrics").await;
     public_metrics.assert_status(StatusCode::OK);
     assert!(!public_metrics.json()["items"].as_array().unwrap().is_empty());

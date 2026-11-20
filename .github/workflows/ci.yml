@@ -27,6 +27,7 @@ jobs:
           npm ci
           npm run build
           npm test
+          python3 -m unittest discover -s tests -p test_mcp.py -v
       - name: Test application and Guest Tools
         run: |
           cargo test --locked --all-targets
